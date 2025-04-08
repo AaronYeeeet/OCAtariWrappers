@@ -1,0 +1,54 @@
+cff-version: 1.2.0
+message: "Please cite as:"
+authors:
+- family-names: "Blueml"
+  given-names: "Jannis"
+#   orcid: "https://orcid.org/0000-0000-0000-0000"
+- family-names: "Derstroff"
+  given-names: "Cedric"
+#   orcid: "https://orcid.org/0000-0000-0000-0000"
+- family-names: "Dillies"
+  given-names: "Elisabeth"
+#   orcid: "https://orcid.org/0000-0000-0000-0000"
+- family-names: "Delfosse"
+  given-names: "Quentin"
+#   orcid: "https://orcid.org/0000-0000-0000-0000"
+- family-names: "Kersting"
+  given-names: "Kristian"
+#   orcid: "https://orcid.org/0000-0000-0000-0000"
+title: "OCCAM-Wrappers"
+version: 0.0.1
+# doi: 10.48550/arXiv.2504.03024
+# date-released: 2025-04-03
+url: "https://github.com/VanillaWhey/OCAtariWrappers"
+preferred-citation:
+  type: misc
+  title: "Deep Reinforcement Learning via Object-Centric Attention"
+  authors:
+  - family-names: "Blueml"
+    given-names: "Jannis"
+  #   orcid: "https://orcid.org/0000-0000-0000-0000"
+  - family-names: "Derstroff"
+    given-names: "Cedric"
+  #   orcid: "https://orcid.org/0000-0000-0000-0000"
+  - family-names: "Dillies"
+    given-names: "Elisabeth"
+  #   orcid: "https://orcid.org/0000-0000-0000-0000"
+  - family-names: "Delfosse"
+    given-names: "Quentin"
+  #   orcid: "https://orcid.org/0000-0000-0000-0000"
+  - family-names: "Kersting"
+    given-names: "Kristian"
+  #   orcid: "https://orcid.org/0000-0000-0000-0000"
+#   doi: "10.48550/arXiv.2504.03024"
+#   journal: "ArXiv"
+  identifiers:
+  - type: other
+  value: "arXiv:2504.03024"
+  url: "https://arxiv.org/abs/2504.03024"
+  month: 4
+  start: 1 # First page number
+  end: 26 # Last page number
+#   issue: 1
+#   volume: 1
+  year: 2025
