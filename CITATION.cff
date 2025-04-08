@@ -16,14 +16,14 @@ authors:
 - family-names: "Kersting"
   given-names: "Kristian"
 #   orcid: "https://orcid.org/0000-0000-0000-0000"
-title: "Balancing Abstraction and Spatial Relationships for Robust Reinforcement Learning"
+title: "OCCAM-Wrappers"
 version: 0.0.1
-# doi: 10.5281/zenodo.1234
-date-released: 2025-XX-YY
+# doi: 10.48550/arXiv.2504.03024
+# date-released: 2025-04-03
 url: "https://github.com/VanillaWhey/OCAtariWrappers"
 preferred-citation:
-  type: unpublished
-  title: "Balancing Abstraction and Spatial Relationships for Robust Reinforcement Learning"
+  type: misc
+  title: "Deep Reinforcement Learning via Object-Centric Attention"
   authors:
   - family-names: "Blueml"
     given-names: "Jannis"
@@ -40,11 +40,12 @@ preferred-citation:
   - family-names: "Kersting"
     given-names: "Kristian"
   #   orcid: "https://orcid.org/0000-0000-0000-0000"
-#   doi: "10.0000/00000"
-#   journal: "Journal Title"
-#   month: 9
-#   start: 1 # First page number
-#   end: 10 # Last page number
+  doi: "10.48550/arXiv.2504.03024"
+  journal: "ArXiv"
+  url: "https://arxiv.org/abs/2504.03024"
+  month: 4
+  start: 1 # First page number
+  end: 26 # Last page number
 #   issue: 1
 #   volume: 1
   year: 2025
