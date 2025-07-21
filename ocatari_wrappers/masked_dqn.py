@@ -4,6 +4,7 @@ import gymnasium as gym
 from collections import deque
 
 from ocatari.ram.extract_ram_info import get_class_dict, get_max_objects
+from ocatari.ram import GameObject
 
 
 class MaskedBaseWrapper(gym.ObservationWrapper):
@@ -201,3 +202,41 @@ class PixelMaskPlanesWrapper(MaskedBaseWrapper):
 
     def set_value(self, y_min, y_max, x_min, x_max, o):
         self.state[self.object_types[o.category], y_min:y_max, x_min:x_max] = self.pixel_screen[y_min:y_max, x_min:x_max]
+
+
+class ImperfectDetectionWrapper(gym.Wrapper):
+    class MislabeledGameObject(GameObject):
+        def __init__(self, category, xywh):
+            self.xywh = xywh
+            self._category = category
+
+        @property
+        def category(self):
+            return self._category
+
+
+    def __init__(self, env, mislabeling_probability=0.1, failed_detection_probability=0.1, noise_std=1.0):
+        super().__init__(env)
+        self.mislabeling_probability = mislabeling_probability
+        self.failed_detection_probability = failed_detection_probability
+        self.noise_std = noise_std
+        self.objects = []
+        self.categories = list(get_max_objects(env.game_name, env.hud).keys())  # noqa: OCAtari in the env stack
+
+    def step(self, action):
+        self.objects = []
+        for o in self.env.objects:  # noqa: OCAtari in the stack
+            if (not (o is None or o.category == "NoObject")
+                    and self.np_random.random() > self.failed_detection_probability):
+                # noisy detection
+                xywh = np.maximum(1, o.xywh + self.np_random.normal(scale=self.noise_std, size=4).astype(int))
+                # mislabelled object
+                if self.np_random.random() <= self.mislabeling_probability:
+                    c = self.np_random.choice(self.categories)
+                else:
+                    c = o.category
+                o = ImperfectDetectionWrapper.MislabeledGameObject(c, xywh)
+
+                self.objects.append(o)
+
+        return super().step(action)
