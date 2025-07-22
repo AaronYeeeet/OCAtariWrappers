@@ -15,7 +15,7 @@ class MaskedBaseWrapper(gym.ObservationWrapper):
     def __init__(self, env, buffer_window_size=4, *, include_pixels=False, num_planes=1, work_in_output_shape=False, needs_pixels=False):
         """
         Args:
-            env (gym.Env, OCAtari): The environment to wrap (Should contain an OCAtari in the stack).
+            env (gym.Env, OCAtari): The environment to wrap. (OCAtari needs to be in the stack)
             buffer_window_size (int): How many observations to stack.
             include_pixels (bool): If True, a grayscale screen is added to the observations.
             num_planes (int): The number of planes that this wrapper will produce (only important for subclasses).
@@ -157,8 +157,10 @@ class ObjectTypeMaskWrapper(MaskedBaseWrapper):
     only filled bounding boxes of all objects on a black background where
     each object type has a different shade of gray.
     """
-
-    def __init__(self, env: gym.Env, *args, v2=False, **kwargs):
+    def __init__(self, env, *args, v2=False, **kwargs):
+        """
+        :param v2: Only use HUD objects if HUD is specified.
+        """
         super().__init__(env, *args, **kwargs)
         if v2:
             keys = get_max_objects(env.game_name, env.hud).keys()  # noqa: OCAtari in the env stack
@@ -177,8 +179,10 @@ class ObjectTypeMaskPlanesWrapper(MaskedBaseWrapper):
     only white bounding boxes of all objects on a black background, where
     every object type is on its own plane.
     """
-
-    def __init__(self, env: gym.Env, *args, v2=False, **kwargs):
+    def __init__(self, env, *args, v2=False, **kwargs):
+        """
+        :param v2: Only use HUD objects if HUD is specified.
+        """
         if v2:
             self.object_types = {k: i for i, k in enumerate(get_max_objects(env.game_name, env.hud).keys())}  # noqa: OCAtari in the env stack
         else:
@@ -195,8 +199,7 @@ class PixelMaskPlanesWrapper(MaskedBaseWrapper):
     boxes of all objects filled with their grayscale pixels, where
     every object type is on its own plane.
     """
-
-    def __init__(self, env: gym.Env, *args, **kwargs):
+    def __init__(self, env, *args, **kwargs):
         self.object_types = {k: i for i, k in enumerate(get_max_objects(env.game_name, env.hud).keys())}  # noqa: OCAtari in the env stack
         super().__init__(env, num_planes=len(self.object_types), *args, work_in_output_shape=False, needs_pixels=True, **kwargs)
 
@@ -205,7 +208,13 @@ class PixelMaskPlanesWrapper(MaskedBaseWrapper):
 
 
 class ImperfectDetectionWrapper(gym.Wrapper):
+    """
+    A wrapper to simulate an imperfect object detector.
+    """
     class MislabeledGameObject(GameObject):
+        """
+        A GameObject that can be of any category.
+        """
         def __init__(self, category, xywh):
             self.xywh = xywh
             self._category = category
@@ -216,6 +225,12 @@ class ImperfectDetectionWrapper(gym.Wrapper):
 
 
     def __init__(self, env, mislabeling_probability=0.1, failed_detection_probability=0.1, noise_std=1.0):
+        """
+        :param env (gym.Env, OCAtari): The environment to wrap. (OCAtari needs to be in the stack)
+        :param mislabeling_probability (float): The probability of mislabeling the object into another random category.
+        :param failed_detection_probability (float): The probability of not detecting an object.
+        :param noise_std (float): The standard deviation for the Gaussian noise added to the xywh values.
+        """
         super().__init__(env)
         self.mislabeling_probability = mislabeling_probability
         self.failed_detection_probability = failed_detection_probability
@@ -227,7 +242,7 @@ class ImperfectDetectionWrapper(gym.Wrapper):
         self.objects = []
         for o in self.env.objects:  # noqa: OCAtari in the stack
             if (not (o is None or o.category == "NoObject")
-                    and self.np_random.random() > self.failed_detection_probability):
+                    and self.np_random.random() > self.failed_detection_probability): # failed detection
                 # noisy detection
                 xywh = np.maximum(1, o.xywh + self.np_random.normal(scale=self.noise_std, size=4).astype(int))
                 # mislabelled object
