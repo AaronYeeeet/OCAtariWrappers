@@ -3,8 +3,8 @@ from .frostbite import *
 
 # aliales to match the names in the paper
 from .masked_dqn import (
-    BinaryMaskWrapper as BinaryMaskWrapper,
-    ObjectTypeMaskWrapper as ClassMaskWrapper,
-    PixelMaskWrapper as ObjectMaskWrapper,
+    BinaryMaskWrapper as BinaryMasksWrapper,
+    ObjectTypeMaskWrapper as ClassMasksWrapper,
+    PixelMaskWrapper as ObjectMasksWrapper,
     ObjectTypeMaskPlanesWrapper as PlanesWrapper
 )
