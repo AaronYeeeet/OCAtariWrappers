@@ -19,7 +19,7 @@ from ocatari import OCAtari
 
 env = OCAtari("ALE/Frostbite")
 
-env = BinaryMaskWrapper(env, include_pixels=True)
+env = BinaryMaskWrapper(env)
 
 obs, info = env.reset()
 
