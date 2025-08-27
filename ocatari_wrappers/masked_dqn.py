@@ -203,7 +203,7 @@ class BigPlaneWrapper(MaskedBaseWrapper):
         self.object_types = {k: i for i, k in enumerate(get_max_objects(env.game_name, env.hud).keys())}  # noqa: OCAtari in the env stack
         super().__init__(env, work_in_output_shape=True, include_pixels=False, *args, **kwargs)
         length = len(self.object_types) * 84
-        self.working_shape = (1, 84, length)
+        self.working_shape = (self.buffer_window_size, 84, length)
         self.observation_space = gym.spaces.Box(0, 255.0, self.working_shape)
 
     def set_value(self, y_min, y_max, x_min, x_max, o):
