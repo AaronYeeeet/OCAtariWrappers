@@ -192,6 +192,24 @@ class ObjectTypeMaskPlanesWrapper(MaskedBaseWrapper):
     def set_value(self, y_min, y_max, x_min, x_max, o):
         self.state[self.object_types[o.category], y_min:y_max, x_min:x_max].fill(255)
 
+class BigPlaneWrapper(MaskedBaseWrapper):
+    """
+    A Wrapper that outputs a binary mask including
+    only white bounding boxes of all objects on a black background, where
+    every object type is on its own 84x84 area in the big plane (84x(84n),
+    n = number of object types).
+    """
+    def __init__(self, env, *args, **kwargs):
+        self.object_types = {k: i for i, k in enumerate(get_max_objects(env.game_name, env.hud).keys())}  # noqa: OCAtari in the env stack
+        super().__init__(env, work_in_output_shape=True, include_pixels=False, *args, **kwargs)
+        length = len(self.object_types) * 84
+        self.working_shape = (1, 84, length)
+        self.observation_space = gym.spaces.Box(0, 255.0, self.working_shape)
+
+    def set_value(self, y_min, y_max, x_min, x_max, o):
+        offset = self.object_types[o.category] * 84
+        self.state[0, y_min:y_max, offset + x_min: offset + x_max].fill(255)
+
 
 class PixelMaskPlanesWrapper(MaskedBaseWrapper):
     """
