@@ -225,7 +225,7 @@ class PixelMaskPlanesWrapper(MaskedBaseWrapper):
         self.state[self.object_types[o.category], y_min:y_max, x_min:x_max] = self.pixel_screen[y_min:y_max, x_min:x_max]
 
 
-class ImperfectDetectionWrapper(gym.Wrapper):
+class ImperfectDetectionWrapper(gym.ObservationWrapper):
     """
     A wrapper to simulate an imperfect object detector.
     """
@@ -234,6 +234,7 @@ class ImperfectDetectionWrapper(gym.Wrapper):
         A GameObject that can be of any category.
         """
         def __init__(self, category, xywh):
+            super().__init__()
             self.xywh = xywh
             self._category = category
 
@@ -256,13 +257,15 @@ class ImperfectDetectionWrapper(gym.Wrapper):
         self.objects = []
         self.categories = list(get_max_objects(env.game_name, env.hud).keys())  # noqa: OCAtari in the env stack
 
-    def step(self, action):
+
+    def observation(self, observation):
         self.objects = []
         for o in self.env.objects:  # noqa: OCAtari in the stack
             if (not (o is None or o.category == "NoObject")
                     and self.np_random.random() > self.failed_detection_probability): # failed detection
                 # noisy detection
-                xywh = np.maximum(1, o.xywh + self.np_random.normal(scale=self.noise_std, size=4).astype(int))
+                xywh = o.xywh + self.np_random.normal(scale=self.noise_std, size=4).astype(int)
+                xywh = np.maximum([-xywh[2] + 1, -xywh[3] + 1, 1, 1], xywh)
                 # mislabelled object
                 if self.np_random.random() <= self.mislabeling_probability:
                     c = self.np_random.choice(self.categories)
@@ -271,5 +274,4 @@ class ImperfectDetectionWrapper(gym.Wrapper):
                 o = ImperfectDetectionWrapper.MislabeledGameObject(c, xywh)
 
                 self.objects.append(o)
-
-        return super().step(action)
+        return observation
