@@ -275,3 +275,29 @@ class ImperfectDetectionWrapper(gym.ObservationWrapper):
 
                 self.objects.append(o)
         return observation
+
+
+class MultiOCCAMWrapper(gym.ObservationWrapper):
+    def __init__(self, env, wrappers, **kwargs):
+
+        mapping = {
+            "plane_masks": ObjectTypeMaskPlanesWrapper,
+            "class_masks": ObjectTypeMaskWrapper,
+            "binary_masks": BinaryMaskWrapper,
+            "object_masks": PixelMaskWrapper,
+            "pixel_planes": PixelMaskPlanesWrapper,
+            "big_planes": BigPlaneWrapper,
+        }
+
+        self.wrappers = {}
+        spaces = {}
+        for key in wrappers:
+            env = mapping[key](env, **kwargs)
+            self.wrappers[key] = env
+            spaces[key] = env.observation_space
+
+        super().__init__(env)
+        self.observation_space = gym.spaces.Dict(spaces)
+
+    def observation(self, observation):
+        return {key: self.wrappers[key].create_obs(self.wrappers[key].state) for key in self.wrappers}
