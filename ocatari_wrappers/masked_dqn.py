@@ -3,6 +3,7 @@ import numpy as np
 import gymnasium as gym
 from collections import deque
 
+from gymnasium.core import ObsType, WrapperObsType
 from ocatari.ram.extract_ram_info import get_class_dict, get_max_objects
 from ocatari.ram import GameObject
 
@@ -280,6 +281,28 @@ class ImperfectDetectionWrapper(gym.ObservationWrapper):
 class MultiOCCAMWrapper(gym.ObservationWrapper):
     def __init__(self, env, wrappers, **kwargs):
 
+        class DQNWrapper(gym.ObservationWrapper):
+            def __init__(self, env):
+                super().__init__(env)
+                self._buffer = deque(maxlen=4)
+                self.observation_space = gym.spaces.Box(0, 255, shape=(4, 84, 84))
+
+            def observation(self, observation):
+                state = self.unwrapped.ale.getScreenGrayscale()  # noqa: there must be an ALE
+                state = cv2.resize(state, (84, 84), interpolation=cv2.INTER_AREA)
+                self._buffer.append(state)
+                return np.asarray(self._buffer)
+
+            def reset(self, *args, **kwargs):
+                ret = super().reset(*args, **kwargs)
+
+                # fill buffer
+                for _ in range(4):
+                    obs = self.observation(ret[0])
+
+                return obs, *ret[1:]  # noqa: cannot be undefined
+
+
         mapping = {
             "plane_masks": ObjectTypeMaskPlanesWrapper,
             "class_masks": ObjectTypeMaskWrapper,
@@ -287,6 +310,7 @@ class MultiOCCAMWrapper(gym.ObservationWrapper):
             "object_masks": PixelMaskWrapper,
             "pixel_planes": PixelMaskPlanesWrapper,
             "big_planes": BigPlaneWrapper,
+            "dqn": DQNWrapper
         }
 
         self.wrappers = {}
@@ -300,4 +324,4 @@ class MultiOCCAMWrapper(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Dict(spaces)
 
     def observation(self, observation):
-        return {key: np.asarray(self.wrappers[key]._buffer) for key in self.wrappers}
+        return {key: np.asarray(self.wrappers[key]._buffer) for key in self.wrappers}  # noqa: private property of class in this file
