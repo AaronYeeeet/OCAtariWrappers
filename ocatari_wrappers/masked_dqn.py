@@ -300,4 +300,4 @@ class MultiOCCAMWrapper(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Dict(spaces)
 
     def observation(self, observation):
-        return {key: self.wrappers[key].create_obs(self.wrappers[key].state) for key in self.wrappers}
+        return {key: np.asarray(self.wrappers[key]._buffer) for key in self.wrappers}
