@@ -4,7 +4,7 @@ hackatari==0.0.6
 matplotlib==3.5.3
 numpy==1.24.4
 ocatari==2.1.0
-pygame==2.1.0
+pygame==2.6.1
 rliable==1.2.0
 stable_baselines3==2.5.0
 torch==2.7.1
