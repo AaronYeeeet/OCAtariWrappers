@@ -15,11 +15,18 @@ OUTPUT_DIR = Path("gradient_saliency_output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
-def test_gradient_saliency_wrapper():
-    """Tests GradientSaliencyWrapper."""
+def test_gradient_saliency_wrapper(num_images=5, frames_between=30):
+    """
+    Tests GradientSaliencyWrapper.
+
+    Args:
+        num_images: How many images to generate
+        frames_between: How many frames to skip between each image
+    """
     print("=" * 60)
     print("Test: Gradient Saliency Wrapper")
-    print("=" * 60 + "\n")
+    print("=" * 60)
+    print(f"Generating {num_images} images, {frames_between} frames apart\n")
 
     try:
         from ocatari.core import OCAtari
@@ -92,63 +99,69 @@ def test_gradient_saliency_wrapper():
         print(f"✓ Binary mask: {obs1.shape}")
         print(f"✓ Gradient saliency: {obs2.shape}\n")
 
-        # 3. Run steps
-        print("Running simulation...")
-        for step in range(50):
-            action = env0.action_space.sample()
-            obs0_raw, _, term0, trunc0, _ = env0.step(action)
-            obs1, _, term1, trunc1, _ = env1.step(action)
-            obs2, _, term2, trunc2, _ = env2.step(action)
+        # 3. Generate multiple images
+        print("Running simulation and generating images...")
+        saved_images = []
 
-            if term0 or trunc0:
-                obs0_raw, _ = env0.reset()
-            if term1 or trunc1:
-                obs1, _ = env1.reset()
-            if term2 or trunc2:
-                obs2, _ = env2.reset()
+        for img_idx in range(num_images):
+            # Run N frames
+            for step in range(frames_between):
+                action = env0.action_space.sample()
+                obs0_raw, _, term0, trunc0, _ = env0.step(action)
+                obs1, _, term1, trunc1, _ = env1.step(action)
+                obs2, _, term2, trunc2, _ = env2.step(action)
 
-        print(f"✓ Finished 50 steps\n")
+                if term0 or trunc0:
+                    obs0_raw, _ = env0.reset()
+                if term1 or trunc1:
+                    obs1, _ = env1.reset()
+                if term2 or trunc2:
+                    obs2, _ = env2.reset()
 
-        # 4. Visualization
-        print("Creating visualization...")
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+            # Create visualization for this frame
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-        # Raw Input
-        img0 = obs0_raw[0]
-        axes[0].imshow(img0, cmap='gray', vmin=0, vmax=255)
-        axes[0].set_title('Raw Input\n(original screen)', fontweight='bold', fontsize=12)
-        axes[0].axis('off')
-        axes[0].text(0.02, 0.98, f'Min: {img0.min()}\nMax: {img0.max()}\nUnique: {len(np.unique(img0))}',
-                    transform=axes[0].transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9)
+            # Raw Input
+            img0 = obs0_raw[0]
+            axes[0].imshow(img0, cmap='gray', vmin=0, vmax=255)
+            axes[0].set_title('Raw Input\n(original screen)', fontweight='bold', fontsize=12)
+            axes[0].axis('off')
+            axes[0].text(0.02, 0.98, f'Min: {img0.min()}\nMax: {img0.max()}\nUnique: {len(np.unique(img0))}',
+                        transform=axes[0].transAxes, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9)
 
-        # Binary Mask
-        img1 = obs1[0]
-        axes[1].imshow(img1, cmap='gray', vmin=0, vmax=255)
-        axes[1].set_title('Binary Mask\n(all objects equal)', fontweight='bold', fontsize=12)
-        axes[1].axis('off')
-        axes[1].text(0.02, 0.98, f'Min: {img1.min()}\nMax: {img1.max()}\nUnique: {len(np.unique(img1))}',
-                    transform=axes[1].transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9)
+            # Binary Mask
+            img1 = obs1[0]
+            axes[1].imshow(img1, cmap='gray', vmin=0, vmax=255)
+            axes[1].set_title('Binary Mask\n(all objects equal)', fontweight='bold', fontsize=12)
+            axes[1].axis('off')
+            axes[1].text(0.02, 0.98, f'Min: {img1.min()}\nMax: {img1.max()}\nUnique: {len(np.unique(img1))}',
+                        transform=axes[1].transAxes, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9)
 
-        # Gradient Saliency
-        img2 = obs2[0]
-        axes[2].imshow(img2, cmap='gray', vmin=0, vmax=255)
-        axes[2].set_title('Gradient Saliency\n(weighted)', fontweight='bold', fontsize=12)
-        axes[2].axis('off')
-        axes[2].text(0.02, 0.98, f'Min: {img2.min()}\nMax: {img2.max()}\nUnique: {len(np.unique(img2))}',
-                    transform=axes[2].transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9)
+            # Gradient Saliency
+            img2 = obs2[0]
+            axes[2].imshow(img2, cmap='gray', vmin=0, vmax=255)
+            axes[2].set_title('Gradient Saliency\n(weighted)', fontweight='bold', fontsize=12)
+            axes[2].axis('off')
+            axes[2].text(0.02, 0.98, f'Min: {img2.min()}\nMax: {img2.max()}\nUnique: {len(np.unique(img2))}',
+                        transform=axes[2].transAxes, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9)
 
-        plt.suptitle(f'Comparison: Raw Input vs. Binary vs. Gradient Saliency ({game})',
-                     fontsize=14, fontweight='bold')
-        plt.tight_layout()
+            frame_num = (img_idx + 1) * frames_between
+            plt.suptitle(f'Frame {frame_num}: Raw Input vs. Binary vs. Gradient Saliency ({game})',
+                         fontsize=14, fontweight='bold')
+            plt.tight_layout()
 
-        # Save
-        output_path = OUTPUT_DIR / "gradient_saliency_comparison.png"
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
-        print(f"✓ Image saved: {output_path}\n")
-        plt.close()
+            # Save
+            output_path = OUTPUT_DIR / f"comparison_frame_{frame_num:04d}.png"
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            print(f"✓ Image {img_idx + 1}/{num_images} saved: {output_path.name}")
+            plt.close()
+
+            saved_images.append(output_path)
+
+        print(f"\n✓ Generated {len(saved_images)} images\n")
 
         # Cleanup
         env0.close()
@@ -159,7 +172,9 @@ def test_gradient_saliency_wrapper():
         print("✅ Test passed")
         print("=" * 60)
         print(f"\nResult: {OUTPUT_DIR.absolute()}")
-        print(f"  - {output_path.name}")
+        print(f"Generated {len(saved_images)} images:")
+        for img_path in saved_images:
+            print(f"  - {img_path.name}")
 
         return True
 
