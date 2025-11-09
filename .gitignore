@@ -176,5 +176,5 @@ cython_debug/
 # MAC?
 *.DS_Store
 
-# Experiment folder
+# Experiment folder EXCLUDES HACKATARI ETC
 /runs
