@@ -10,7 +10,7 @@ from load_agent import load_agent
 import os
 import argparse
 import json
-from ocatari_wrappers import BinaryMaskWrapper, PixelMaskWrapper, ObjectTypeMaskWrapper, ObjectTypeMaskPlanesWrapper, PixelMaskPlanesWrapper
+from ocatari_wrappers import BinaryMaskWrapper, PixelMaskWrapper, ObjectTypeMaskWrapper, ObjectTypeMaskPlanesWrapper, PixelMaskPlanesWrapper, GradientSaliencyWrapper
 from stable_baselines3.common.atari_wrappers import (
     EpisodicLifeEnv,
     FireResetEnv,
@@ -106,6 +106,7 @@ def main():
         "planes": ObjectTypeMaskPlanesWrapper,
     }
 
+    # Apply wrapper (except gradient_saliency which needs the model)
     if args.wrapper in wrapper_mapping:
         env = wrapper_mapping[args.wrapper](env)
     elif args.wrapper.endswith("+pixels"):
@@ -118,6 +119,10 @@ def main():
     for agent_path in args.agents:
         agent, policy = load_agent(agent_path, env, "cpu")
         print(f"Loaded agent from {agent_path}")
+
+        # Apply gradient_saliency wrapper AFTER loading agent
+        if args.wrapper == "gradient_saliency":
+            env = GradientSaliencyWrapper(env, trained_model=agent)
 
         rewards = []
         for episode in range(args.episodes):

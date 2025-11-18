@@ -11,10 +11,8 @@ class GradientSaliencyWrapper(MaskedBaseWrapper):
 
         if trained_model is not None:
             self.device = next(trained_model.parameters()).device
-            print("✅ GradientSaliencyWrapper: Using gradient-based saliency")
         else:
             self.device = torch.device('cpu')
-            print("⚠️  GradientSaliencyWrapper: No model provided, using uniform saliency")
 
     def observation(self, observation):
         #only compute saliency map when buffer is full
