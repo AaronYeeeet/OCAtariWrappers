@@ -128,11 +128,11 @@ def main():
                 obss.append(obs)
 
             nstep += 1
-            #env.render(env._state_buffer_rgb[-1])
+            env.render(env._state_buffer_rgb[-1])
             #plt.imshow(env._state_buffer_dqn[-1])
             #plt.show()
-            plt.imshow(obs[0])
-            plt.show()
+            #plt.imshow(obs[0])
+            #plt.show()
 
         env.close()
 
