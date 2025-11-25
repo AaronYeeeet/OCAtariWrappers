@@ -71,7 +71,7 @@ class SarfaExplainer():
 
         Args:
             model: PyTorch nn.Module
-            x: Input as NumPy array with shape (batch, height, width, channels)
+            x: Input as NumPy array with shape (batch, channels, height, width)
 
         Returns:
             Predictions as NumPy array
@@ -79,11 +79,8 @@ class SarfaExplainer():
         import torch
 
         with torch.no_grad():
-            # Convert from (B, H, W, C) to (B, C, H, W) for PyTorch
-            x_tensor = torch.FloatTensor(x).permute(0, 3, 1, 2)
-
-            # Normalize pixel values (0-255 -> 0.0-1.0)
-            x_tensor = x_tensor / 255.0
+            # Convert to tensor and normalize (shape already (B, C, H, W)!)
+            x_tensor = torch.FloatTensor(x) / 255.0
 
             # Check for PPO-style architecture (network + actor)
             if hasattr(model, 'network') and hasattr(model, 'actor'):
@@ -141,7 +138,7 @@ class SarfaExplainer():
         Generates a SARFA explanation for the prediction of a CNN
 
         Args:
-            stacked_frames: input of which the prediction will be explained (H, W, C)
+            stacked_frames: input of which the prediction will be explained (C, H, W) - PyTorch format!
             model: PyTorch model to be explained
             radius: the radius of the black circle
             blur: use blur or occlusion for perturbation
@@ -149,13 +146,15 @@ class SarfaExplainer():
                             otherwise this should be the index of the action to be explained
 
         Returns:
-            scores: The saliency map which functions as explanation
+            scores: The saliency map which functions as explanation (H, W)
         """
         # d: density of scores (if d==1, then get a score for every pixel...
         #    if d==2 then every other, which is 25% of total pixels for a 2D image)
         d = radius
 
-        my_input = np.expand_dims(stacked_frames, axis=0)
+        c, h, w = stacked_frames.shape  # Now (C, H, W)!
+
+        my_input = np.expand_dims(stacked_frames, axis=0)  # (1, C, H, W)
         original_output = self._predict_with_model(model, my_input)
 
         # get the action to be explained
@@ -164,20 +163,19 @@ class SarfaExplainer():
         else:
             action_index = np.argmax(original_output)
 
-        x = stacked_frames.shape[0]
-        y = stacked_frames.shape[1]
+        scores = np.zeros((int((h-1) / d) + 1, int((w-1) / d) + 1))  # saliency scores S(t,i,j)
 
-        scores = np.zeros((int((x-1) / d) + 1, int((y-1) / d) + 1))  # saliency scores S(t,i,j)
-
-        for i in range(0, x, d):
-            for j in range(0, y, d):
+        for i in range(0, h, d):
+            for j in range(0, w, d):
                 if blur:
-                    mask = self.get_blur_mask(center=[i, j], size=[x, y], radius=radius)
+                    mask = self.get_blur_mask(center=[i, j], size=[h, w], radius=radius)
                 else:
-                    mask = self.get_occlusion_mask(center=[i, j], size=[x, y], radius=radius)
-                stacked_mask = np.zeros(shape=stacked_frames.shape)
-                for idx in range(stacked_frames.shape[2]):
-                    stacked_mask[:, :, idx] = mask
+                    mask = self.get_occlusion_mask(center=[i, j], size=[h, w], radius=radius)
+
+                # Create mask for all channels
+                stacked_mask = np.zeros(shape=stacked_frames.shape)  # (C, H, W)
+                for idx in range(c):
+                    stacked_mask[idx, :, :] = mask
 
                 if blur:
                     masked_input = np.expand_dims(SarfaExplainer.occlude_blur(stacked_frames, stacked_mask), axis=0)
@@ -188,6 +186,6 @@ class SarfaExplainer():
                 scores[int(i / d), int(j / d)] = sarfa_saliency(original_output, masked_output, action_index)
 
         pmax = scores.max()
-        scores = Image.fromarray(scores).resize(size=[x, y], resample=Image.Resampling.BILINEAR)
+        scores = Image.fromarray(scores).resize(size=[w, h], resample=Image.Resampling.BILINEAR)
         scores = pmax * scores / np.array(scores).max()
         return scores

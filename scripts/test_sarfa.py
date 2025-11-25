@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 from ocatari_wrappers.sarfa import SarfaExplainer
 from load_agent import load_agent
 from hackatari import HackAtari
@@ -36,17 +35,13 @@ def test_sarfa(game, agent_path, radius=5, blur=False, save_path='sarfa_output.p
     # Environment zurücksetzen und Observation holen
     obs, _ = env.reset()
 
-    print(f"Observation shape: {obs.shape}")  # Sollte (4, 84, 84) sein
-
-    # Konvertiere von (channels, height, width) zu (height, width, channels)
-    stacked_frames = np.transpose(obs, (1, 2, 0))
-    print(f"Stacked frames shape: {stacked_frames.shape}")  # Sollte (84, 84, 4) sein
+    print(f"Observation shape: {obs.shape}")  # (4, 84, 84) - bereits PyTorch Format!
 
     print(f"Generiere SARFA Saliency Map (radius={radius}, blur={blur})...")
-    # DIREKT den PyTorch-Agent übergeben - kein Wrapper mehr nötig! 🎉
+    # DIREKT obs übergeben - kein transpose mehr nötig! 🎉
     saliency_map = explainer.generate_explanation(
-        stacked_frames=stacked_frames,
-        model=agent,  # ← PyTorch-Modell wird automatisch erkannt!
+        stacked_frames=obs,  # ← Direkt (C, H, W) Format!
+        model=agent,
         radius=radius,
         blur=blur
     )
