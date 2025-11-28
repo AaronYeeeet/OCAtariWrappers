@@ -65,33 +65,18 @@ class SarfaExplainer():
     occlude = lambda I, mask: I * (1 - mask)
     occlude_blur = lambda I, mask: I * (1 - mask) + gaussian_filter(I, sigma=3) * mask # choose an area to blur
 
-    def _predict_with_model(self, model, x):
-        """
-        Predict function for PyTorch models.
-
-        Args:
-            model: PyTorch nn.Module
-            x: Input as NumPy array with shape (batch, channels, height, width)
-
-        Returns:
-            Predictions as NumPy array
-        """
+    def port_for_OCAtariWrappers(self, model, x):
         import torch
 
         with torch.no_grad():
-            # Convert to tensor and normalize (shape already (B, C, H, W)!)
+            # Convert to tensor and normalize
             x_tensor = torch.FloatTensor(x) / 255.0
+            # Run the agent
+            hidden = model.network(x_tensor)
+            logits = model.actor(hidden)
+            return logits.cpu().numpy()
 
-            # Check for PPO-style architecture (network + actor)
-            if hasattr(model, 'network') and hasattr(model, 'actor'):
-                hidden = model.network(x_tensor)
-                logits = model.actor(hidden)
-                return logits.cpu().numpy()
 
-            # DQN-style or direct forward pass
-            else:
-                output = model(x_tensor)
-                return output.cpu().numpy()
 
 
     def get_occlusion_mask(self, center, size, radius):
@@ -138,24 +123,24 @@ class SarfaExplainer():
         Generates a SARFA explanation for the prediction of a CNN
 
         Args:
-            stacked_frames: input of which the prediction will be explained (C, H, W) - PyTorch format!
-            model: PyTorch model to be explained
+            stacked_frames: input of which the prediction will be explained
+            model: the model which should be explained
             radius: the radius of the black circle
             blur: use blur or occlusion for perturbation
             neuron_selection: if False, the best action is explained
                             otherwise this should be the index of the action to be explained
 
         Returns:
-            scores: The saliency map which functions as explanation (H, W)
+            scores: The saliency map which functions as explanantion
         """
         # d: density of scores (if d==1, then get a score for every pixel...
         #    if d==2 then every other, which is 25% of total pixels for a 2D image)
         d = radius
 
-        c, h, w = stacked_frames.shape  # Now (C, H, W)!
+        c, h, w = stacked_frames.shape
 
-        my_input = np.expand_dims(stacked_frames, axis=0)  # (1, C, H, W)
-        original_output = self._predict_with_model(model, my_input)
+        my_input = np.expand_dims(stacked_frames, axis=0)
+        original_output = self.port_for_OCAtariWrappers(model, my_input)
 
         # get the action to be explained
         if neuron_selection is not False:
@@ -163,7 +148,7 @@ class SarfaExplainer():
         else:
             action_index = np.argmax(original_output)
 
-        scores = np.zeros((int((h-1) / d) + 1, int((w-1) / d) + 1))  # saliency scores S(t,i,j)
+        scores = np.zeros((int((h-1) / d) + 1, int((w-1) / d) + 1))
 
         for i in range(0, h, d):
             for j in range(0, w, d):
@@ -172,8 +157,7 @@ class SarfaExplainer():
                 else:
                     mask = self.get_occlusion_mask(center=[i, j], size=[h, w], radius=radius)
 
-                # Create mask for all channels
-                stacked_mask = np.zeros(shape=stacked_frames.shape)  # (C, H, W)
+                stacked_mask = np.zeros(shape=stacked_frames.shape)
                 for idx in range(c):
                     stacked_mask[idx, :, :] = mask
 
@@ -181,7 +165,7 @@ class SarfaExplainer():
                     masked_input = np.expand_dims(SarfaExplainer.occlude_blur(stacked_frames, stacked_mask), axis=0)
                 else:
                     masked_input = np.expand_dims(SarfaExplainer.occlude(stacked_frames, stacked_mask), axis=0)
-                masked_output = self._predict_with_model(model, masked_input)
+                masked_output = self.port_for_OCAtariWrappers(model, masked_input)
 
                 scores[int(i / d), int(j / d)] = sarfa_saliency(original_output, masked_output, action_index)
 
