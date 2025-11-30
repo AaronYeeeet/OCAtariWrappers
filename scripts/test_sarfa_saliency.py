@@ -10,13 +10,13 @@ import torch
 import gymnasium as gym
 
 
-# Create output directory
+# Create output directory (in parent OCAtariWrappers folder)
 OUTPUT_DIR = Path("sarfa_saliency_output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 def test_sarfa_saliency_wrapper(game="FreewayNoFrameskip-v4", model_name="Freeway",
-                                 num_images=5, frames_between=30, use_blur=False):
+                                 num_images=5, frames_between=30, use_blur=False, use_masked=False):
     """
     Tests SarfaSaliencyWrapper.
 
@@ -26,6 +26,7 @@ def test_sarfa_saliency_wrapper(game="FreewayNoFrameskip-v4", model_name="Freewa
         num_images: How many images to generate
         frames_between: How many frames to skip between each image
         use_blur: Use blur instead of occlusion for SARFA
+        use_masked: Use binary masked frames instead of raw grayscale
     """
     print("=" * 60)
     print("Test: SARFA Saliency Wrapper")
@@ -33,7 +34,8 @@ def test_sarfa_saliency_wrapper(game="FreewayNoFrameskip-v4", model_name="Freewa
     print(f"Game: {game}")
     print(f"Model: {model_name}")
     print(f"Generating {num_images} images, {frames_between} frames apart")
-    print(f"Perturbation method: {'Blur' if use_blur else 'Occlusion'}\n")
+    print(f"Perturbation method: {'Blur' if use_blur else 'Occlusion'}")
+    print(f"Frame mode: {'Binary Masked' if use_masked else 'Raw Grayscale'}\n")
 
     try:
         from ocatari.core import OCAtari
@@ -103,7 +105,7 @@ def test_sarfa_saliency_wrapper(game="FreewayNoFrameskip-v4", model_name="Freewa
 
         # SARFA Saliency
         env3 = OCAtari(game, mode="ram", hud=True)
-        env3 = SarfaSaliencyWrapper(env3, trained_model=model, use_blur=use_blur, radius=3)
+        env3 = SarfaSaliencyWrapper(env3, trained_model=model, use_blur=use_blur, radius=3, use_binary_mask=use_masked)
         obs3, _ = env3.reset()
 
         print(f"✓ Raw input: {obs0_raw.shape}")
@@ -174,14 +176,25 @@ def test_sarfa_saliency_wrapper(game="FreewayNoFrameskip-v4", model_name="Freewa
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9)
 
             frame_num = (img_idx + 1) * frames_between
-            plt.suptitle(f'{game} - Frame {frame_num}', fontsize=14, fontweight='bold')
+
+            # Build descriptive title
+            title = f'{game} - Frame {frame_num}'
+            title += f" | {'Masked' if use_masked else 'Raw'}"
+            title += f" | {'Blur' if use_blur else 'Occlusion'}"
+
+            plt.suptitle(title, fontsize=14, fontweight='bold')
             plt.tight_layout()
 
-            # Save image
-            output_path = OUTPUT_DIR / f"sarfa_{model_name.lower()}_frame{frame_num:04d}.png"
+            # Build descriptive filename with flag indicators
+            filename = f"sarfa_{model_name.lower()}_frame{frame_num:04d}"
+            filename += f"_{'masked' if use_masked else 'raw'}"
+            filename += f"_{'blur' if use_blur else 'occlude'}"
+            filename += ".png"
+
+            output_path = OUTPUT_DIR / filename
             plt.savefig(output_path, dpi=100, bbox_inches='tight')
             saved_images.append(output_path)
-            print(f"✓ Saved: {output_path}")
+            print(f"✓ Saved: {output_path.name}")
 
             plt.close()
 
@@ -216,6 +229,8 @@ if __name__ == "__main__":
                         help="Frames between each image (default: 30)")
     parser.add_argument("-b", "--blur", action="store_true",
                         help="Use blur instead of occlusion (default: False)")
+    parser.add_argument("--use-masked", action="store_true",
+                        help="Use binary masked frames instead of raw grayscale (default: False)")
 
     args = parser.parse_args()
 
@@ -224,6 +239,7 @@ if __name__ == "__main__":
         model_name=args.model,
         num_images=args.num_images,
         frames_between=args.frames_between,
-        use_blur=args.blur
+        use_blur=args.blur,
+        use_masked=args.use_masked
     )
 

@@ -62,6 +62,8 @@ class GradientSaliencyWrapper(MaskedBaseWrapper):
         # compute the saliency
         mean_gradient = object_gradients.mean()
         max_gradient = self.gradient_map.max()
+        if max_gradient == 0 or np.isnan(mean_gradient) or np.isnan(max_gradient):
+            return 0.0
         saliency = mean_gradient / max_gradient
 
         return float(saliency)
