@@ -97,25 +97,23 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         return super().observation(observation)
 
     def _compute_sarfa_map(self):
-        # Choose frame source based on use_binary_mask flag
         if self.use_binary_mask:
-            current_obs = np.asarray(self._buffer)  # Binary masked frames
+            current_obs = (np.asarray(self._buffer) * 255).astype(np.uint8)  # binary masked frames
         else:
-            current_obs = np.asarray(self.raw_buffer)  # RAW grayscale frames
+            current_obs = np.asarray(self.raw_buffer)  # normal frames
 
-        # Get original model output
+        # normal output
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(current_obs).unsqueeze(0) / 255.0
             hidden = self.model.network(obs_tensor)
             logits = self.model.actor(hidden)
             original_output = logits.cpu().numpy()
 
-        # Get the action being explained
+        # get the action to be explained
         action_index = np.argmax(original_output)
 
-        # Create 2D saliency map (84x84)
-        self.sarfa_map = np.zeros((84, 84), dtype=np.float32)
 
+        self.sarfa_map = np.zeros((84, 84), dtype=np.float32)
         # iterate all objects
         # remove or blur them in the observation
         # compute sarfa map with each object pertubed once

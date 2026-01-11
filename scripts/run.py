@@ -6,6 +6,8 @@ import argparse
 import sys
 from load_agent import load_agent
 import matplotlib.pyplot as plt
+from ocatari_wrappers.sarfa import SarfaExplainer
+from pathlib import Path
 
 
 class HackAtariArgumentParser(argparse.ArgumentParser):
@@ -72,6 +74,16 @@ def main():
                         default=0, help="Alternative ALE difficulty")
     parser.add_argument("-wr", "--wrapper", type=str,
                         default="", help="Use a masking wrapper")
+    parser.add_argument("--sarfa", action="store_true",
+                        help="Generate SARFA saliency maps")
+    parser.add_argument("--sarfa_radius", type=int, default=5,
+                        help="Radius for SARFA perturbation (default: 5)")
+    parser.add_argument("--sarfa_blur", action="store_true",
+                        help="Use blur instead of occlusion for SARFA")
+    parser.add_argument("--sarfa_interval", type=int, default=20,
+                        help="Generate SARFA map every N frames (default: 20)")
+    parser.add_argument("--sarfa_output", type=str, default="sarfa_output",
+                        help="Output directory for SARFA maps (default: sarfa_output)")
 
     args = parser.parse_args()
     obss = []
@@ -92,9 +104,23 @@ def main():
             repeat_action_probability=0.25, full_action_space=False
         )
         pygame.init()
+
+        sarfa_explainer = None
+        sarfa_output_dir = None
+        agent_for_sarfa = None
+        if args.sarfa:
+            if not args.agent:
+                print("ERROR: --sarfa requires --agent to be set!")
+                exit(1)
+            sarfa_explainer = SarfaExplainer()
+            sarfa_output_dir = Path(args.sarfa_output)
+            sarfa_output_dir.mkdir(exist_ok=True)
+            print(f"SARFA enabled: radius={args.sarfa_radius}, blur={args.sarfa_blur}, interval={args.sarfa_interval}")
+            print(f"SARFA output directory: {sarfa_output_dir}")
+
         if args.agent:
             import torch
-            _, policy = load_agent(args.agent, env, "cpu")
+            agent_for_sarfa, policy = load_agent(args.agent, env, "cpu")
             print(f"Loaded agent from {args.agent}")
 
         obs, _ = env.reset()
@@ -128,6 +154,40 @@ def main():
                 obss.append(obs)
 
             nstep += 1
+
+            if sarfa_explainer and (nstep % args.sarfa_interval == 0):
+                print(f"Generating SARFA map at frame {nstep}...")
+                try:
+                    saliency_map = sarfa_explainer.generate_explanation(
+                        stacked_frames=obs,
+                        model=agent_for_sarfa,
+                        radius=args.sarfa_radius,
+                        blur=args.sarfa_blur
+                    )
+                    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+                    # normal
+                    axes[0].imshow(env._state_buffer_rgb[-1])
+                    axes[0].set_title(f"Original Frame {nstep}")
+                    axes[0].axis('off')
+                    # sarfa
+                    axes[1].imshow(obs[-1], cmap='gray')
+                    axes[1].set_title("Grayscale Input")
+                    axes[1].axis('off')
+
+                    im = axes[2].imshow(saliency_map, cmap='hot')
+                    axes[2].set_title(f"SARFA Saliency Map (radius={args.sarfa_radius})")
+                    axes[2].axis('off')
+                    plt.colorbar(im, ax=axes[2])
+
+                    output_filename = sarfa_output_dir / f"sarfa_{args.game.lower()}_frame{nstep:04d}.png"
+                    plt.tight_layout()
+                    plt.savefig(output_filename, dpi=150, bbox_inches='tight')
+                    plt.close()
+                    print(f"✓ Saved SARFA map to {output_filename}")
+
+                except Exception as e:
+                    print(f"✗ Error generating SARFA map: {e}")
+
             env.render(env._state_buffer_rgb[-1])
             #plt.imshow(env._state_buffer_dqn[-1])
             #plt.show()
