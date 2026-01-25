@@ -60,7 +60,8 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
     Saliency per object
     """
 
-    def __init__(self, env, trained_model=None, use_blur=False, radius=3, use_binary_mask=False, *args, **kwargs):
+    def __init__(self, env, trained_model=None, use_blur=False, radius=3,
+                 use_binary_mask=False, warmup_steps=0, *args, **kwargs):
         """
         Args:
             env: The environment to wrap (must have OCAtari in stack)
@@ -68,24 +69,63 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
             use_blur: If True, use blur perturbation instead of occlusion
             radius: Radius for intensity of blur, irrelevant for blur=false
             use_binary_mask: If True, use binary masked frames instead of raw grayscale
+            warmup_steps: Number of steps to show unmasked observations so agent can learn.
         """
         super().__init__(env, *args, **kwargs)
         self.model = trained_model
         self.use_blur = use_blur
         self.radius = radius
         self.use_binary_mask = use_binary_mask
+
+        # Warmup tracking
+        self.warmup_steps = warmup_steps
+        self.total_steps = 0
+
         self.sarfa_map = None
         # two buffers for normal and masked frames
         if not use_binary_mask:
             self.raw_buffer = deque(maxlen=self.buffer_window_size)
 
+        self.use_fade_in = False  # FADE IN
+        self.fade_in_steps = 500_000
+        self.sarfa_step_counter = 0
+
+    def set_model(self, model):
+        """Allows injecting the agent after environment creation"""
+        self.model = model
+
     def observation(self, observation):
-        # use normal atari frames for sarfa computation
-        # this later only takes the sarfa scores on the object boxes for the masked output
+        self.total_steps += 1
+
+        # 1. Raw-Buffer für die spätere SARFA-Berechnung füllen
         if not self.use_binary_mask:
             raw_frame = self.unwrapped.ale.getScreenGrayscale()
             raw_frame_resized = cv2.resize(raw_frame, (84, 84), interpolation=cv2.INTER_AREA)
             self.raw_buffer.append(raw_frame_resized)
+
+        # 2. WICHTIG: Warmup-Gate mit automatischer Skalierung
+        if self.model is None or self.total_steps < self.warmup_steps:
+            # Falls das Bild noch 210x160 (Atari-Original) ist, skaliere es auf 84x84
+            if observation.shape == (210, 160, 3) or observation.shape == (210, 160):
+                if len(observation.shape) == 3:  # Falls RGB, mache es Grau
+                    observation = cv2.cvtColor(observation, cv2.COLOR_RGB2GRAY)
+                return cv2.resize(observation, (84, 84), interpolation=cv2.INTER_AREA)
+            return observation
+
+            # 3. Ab hier: Normaler SARFA-Modus nach dem Warmup
+        if not self.use_binary_mask:
+            if self.model is not None and len(self.raw_buffer) == self.buffer_window_size:
+                self._compute_sarfa_map()
+
+        if self.use_fade_in:
+            self.sarfa_step_counter += 1
+
+        return super().observation(observation)
+
+        # 3. Compute Map (Only if buffer is full)
+        # use normal atari frames for sarfa computation
+        # this later only takes the sarfa scores on the object boxes for the masked output
+        if not self.use_binary_mask:
             if self.model is not None and len(self.raw_buffer) == self.buffer_window_size:
                 self._compute_sarfa_map()
 
@@ -106,6 +146,11 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         # Get original model output
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(current_obs).unsqueeze(0) / 255.0
+
+            # CUDA Check: Ensure input is on same device as model
+            if next(self.model.parameters()).is_cuda:
+                obs_tensor = obs_tensor.cuda()
+
             hidden = self.model.network(obs_tensor)
             logits = self.model.actor(hidden)
             original_output = logits.cpu().numpy()
@@ -154,6 +199,11 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
 
             with torch.no_grad():
                 perturbed_tensor = torch.FloatTensor(perturbed_obs).unsqueeze(0) / 255.0
+
+                # CUDA Check for perturbed input
+                if next(self.model.parameters()).is_cuda:
+                    perturbed_tensor = perturbed_tensor.cuda()
+
                 hidden = self.model.network(perturbed_tensor)
                 logits = self.model.actor(hidden)
                 perturbed_output = logits.cpu().numpy()
@@ -165,7 +215,19 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
     def set_value(self, y_min, y_max, x_min, x_max, o):
         saliency = self._get_object_saliency(y_min, y_max, x_min, x_max)
         intensity = int(255 * np.clip(saliency, 0.0, 1.0))
-        self.state[0, y_min:y_max, x_min:x_max].fill(intensity)
+        # Original logic: replacing the object slice with a flat intensity value
+        if self.use_fade_in and self.sarfa_step_counter < self.fade_in_steps:
+            # Calculate alpha (0.0 at step 0, 1.0 at fade_in_steps)
+            # alpha=0.0 -> full white (255)
+            # alpha=1.0 -> full SARFA intensity
+            alpha = min(1.0, self.sarfa_step_counter / self.fade_in_steps)
+
+            # Blend: start from white (255), fade to SARFA intensity
+            blended_intensity = int((1.0 - alpha) * 255 + alpha * intensity)
+            self.state[0, y_min:y_max, x_min:x_max].fill(blended_intensity)
+        else:
+            # After fade-in period, use full SARFA intensity
+            self.state[0, y_min:y_max, x_min:x_max].fill(intensity)
 
     def _get_object_saliency(self, y_min, y_max, x_min, x_max):
         # not none when buffer full
@@ -179,6 +241,10 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         y_max_scaled = int(y_max * height_grad / height_orig)
         x_min_scaled = int(x_min * width_grad / width_orig)
         x_max_scaled = int(x_max * width_grad / width_orig)
+
+        # Safety Check: ensure slice is never empty
+        if y_max_scaled <= y_min_scaled: y_max_scaled = y_min_scaled + 1
+        if x_max_scaled <= x_min_scaled: x_max_scaled = x_min_scaled + 1
 
         object_scores = self.sarfa_map[y_min_scaled:y_max_scaled,
                                        x_min_scaled:x_max_scaled]
@@ -195,4 +261,3 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         else:
             saliency = 0
         return float(saliency)
-
