@@ -61,7 +61,7 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
     """
 
     def __init__(self, env, trained_model=None, use_blur=False, radius=3,
-                 use_binary_mask=False, warmup_steps=0, *args, **kwargs):
+                 use_binary_mask=False, *args, **kwargs):
         """
         Args:
             env: The environment to wrap (must have OCAtari in stack)
@@ -69,7 +69,6 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
             use_blur: If True, use blur perturbation instead of occlusion
             radius: Radius for intensity of blur, irrelevant for blur=false
             use_binary_mask: If True, use binary masked frames instead of raw grayscale
-            warmup_steps: Number of steps to show unmasked observations so agent can learn.
         """
         super().__init__(env, *args, **kwargs)
         self.model = trained_model
@@ -77,9 +76,6 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         self.radius = radius
         self.use_binary_mask = use_binary_mask
 
-        # Warmup tracking
-        self.warmup_steps = warmup_steps
-        self.total_steps = 0
 
         self.sarfa_map = None
         # two buffers for normal and masked frames
@@ -87,7 +83,7 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
             self.raw_buffer = deque(maxlen=self.buffer_window_size)
 
         self.use_fade_in = False  # FADE IN
-        self.fade_in_steps = 500_000
+        self.fade_in_steps = 500_000 / 10 # 10 is number environments in cleanRL. Divide X by num envs if you want X global step fade
         self.sarfa_step_counter = 0
 
     def set_model(self, model):
@@ -95,44 +91,22 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         self.model = model
 
     def observation(self, observation):
-        self.total_steps += 1
-
         # 1. Raw-Buffer für die spätere SARFA-Berechnung füllen
         if not self.use_binary_mask:
             raw_frame = self.unwrapped.ale.getScreenGrayscale()
             raw_frame_resized = cv2.resize(raw_frame, (84, 84), interpolation=cv2.INTER_AREA)
             self.raw_buffer.append(raw_frame_resized)
 
-        # 2. WICHTIG: Warmup-Gate mit automatischer Skalierung
-        if self.model is None or self.total_steps < self.warmup_steps:
-            # Falls das Bild noch 210x160 (Atari-Original) ist, skaliere es auf 84x84
-            if observation.shape == (210, 160, 3) or observation.shape == (210, 160):
-                if len(observation.shape) == 3:  # Falls RGB, mache es Grau
-                    observation = cv2.cvtColor(observation, cv2.COLOR_RGB2GRAY)
-                return cv2.resize(observation, (84, 84), interpolation=cv2.INTER_AREA)
-            return observation
-
-            # 3. Ab hier: Normaler SARFA-Modus nach dem Warmup
+        # 2. Compute SARFA map if buffer is full
         if not self.use_binary_mask:
             if self.model is not None and len(self.raw_buffer) == self.buffer_window_size:
+                self._compute_sarfa_map()
+        else:
+            if self.model is not None and len(self._buffer) == self.buffer_window_size:
                 self._compute_sarfa_map()
 
         if self.use_fade_in:
             self.sarfa_step_counter += 1
-
-        return super().observation(observation)
-
-        # 3. Compute Map (Only if buffer is full)
-        # use normal atari frames for sarfa computation
-        # this later only takes the sarfa scores on the object boxes for the masked output
-        if not self.use_binary_mask:
-            if self.model is not None and len(self.raw_buffer) == self.buffer_window_size:
-                self._compute_sarfa_map()
-
-        # already uses masked frames
-        else:
-            if self.model is not None and len(self._buffer) == self.buffer_window_size:
-                self._compute_sarfa_map()
 
         return super().observation(observation)
 
