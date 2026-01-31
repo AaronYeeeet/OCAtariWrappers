@@ -85,6 +85,11 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         self.use_fade_in = False  # FADE IN
         self.fade_in_steps = 500_000 / 10 # 10 is number environments in cleanRL. Divide X by num envs if you want X global step fade
         self.sarfa_step_counter = 0
+        self.min_visible = 40  # Minimum intensity after fade-in (0-255), objects never fully invisible
+        # 0 for normal without minimum visibility
+        # Power function for non-linear saliency transformation
+        self.use_gamma = False  # use power function instead of min_visible
+        self.gamma = 0.5  # gamma < 1 hebt niedrige Werte an, gamma > 1 senkt sie (0.5 = Quadratwurzel)
 
     def set_model(self, model):
         """Allows injecting the agent after environment creation"""
@@ -188,6 +193,11 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
 
     def set_value(self, y_min, y_max, x_min, x_max, o):
         saliency = self._get_object_saliency(y_min, y_max, x_min, x_max)
+
+        # Apply gamma transformation if enabled (before intensity calculation)
+        if self.use_gamma:
+            saliency = np.power(np.clip(saliency, 0.0, 1.0), self.gamma)
+
         intensity = int(255 * np.clip(saliency, 0.0, 1.0))
         # Original logic: replacing the object slice with a flat intensity value
         if self.use_fade_in and self.sarfa_step_counter < self.fade_in_steps:
@@ -200,8 +210,12 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
             blended_intensity = int((1.0 - alpha) * 255 + alpha * intensity)
             self.state[0, y_min:y_max, x_min:x_max].fill(blended_intensity)
         else:
-            # After fade-in period, use full SARFA intensity
-            self.state[0, y_min:y_max, x_min:x_max].fill(intensity)
+            # After fade-in, enforce a minimum floor if not using gamma
+            if self.use_gamma:
+                self.state[0, y_min:y_max, x_min:x_max].fill(intensity)
+            else:
+                final_intensity = max(self.min_visible, intensity)
+                self.state[0, y_min:y_max, x_min:x_max].fill(final_intensity)
 
     def _get_object_saliency(self, y_min, y_max, x_min, x_max):
         # not none when buffer full
