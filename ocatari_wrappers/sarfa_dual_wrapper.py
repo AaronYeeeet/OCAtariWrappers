@@ -11,7 +11,6 @@ Channels 4-7: SARFA-weighted frames
 
 import numpy as np
 import torch
-import cv2
 from gymnasium import spaces
 from collections import deque
 from scipy.special import softmax
@@ -84,21 +83,41 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         self.use_gamma = False
         self.gamma = 0.5
 
+        # Temporäres SARFA-Frame für aktuellen Step (wird in set_value() gefüllt)
+        self._current_sarfa_frame = np.zeros((84, 84), dtype=np.uint8)
+
     def set_model(self, model):
         """Allows injecting the agent after environment creation"""
         self.model = model
 
     def set_value(self, y_min, y_max, x_min, x_max, o):
-        """Set binary mask value (white = 255) for objects in the state buffer."""
+        """Set BOTH binary AND SARFA values in one pass."""
+        # 1. Binary mask (wie bisher)
         self.state[0, y_min:y_max, x_min:x_max].fill(255)
 
+        # 2. SARFA-Frame parallel bauen (KEIN extra Loop!)
+        saliency = self._get_object_saliency(y_min, y_max, x_min, x_max)
+
+        if self.use_gamma:
+            saliency = np.power(np.clip(saliency, 0.0, 1.0), self.gamma)
+
+        intensity = int(255 * np.clip(saliency, 0.0, 1.0))
+
+        if not self.use_gamma:
+            intensity = max(self.min_visible, intensity)
+
+        self._current_sarfa_frame[y_min:y_max, x_min:x_max] = intensity
+
     def observation(self, observation):
+        # Reset SARFA-Frame VOR Parent-Call (Parent ruft set_value() auf)
+        self._current_sarfa_frame.fill(0)
+
         # 1. Get binary observation from parent (4, 84, 84)
+        # Parent ruft set_value() auf, das füllt _current_sarfa_frame parallel
         binary_obs = super().observation(observation)
 
-        # 2. Build SARFA-weighted frame for current step
-        sarfa_frame = self._build_sarfa_frame()
-        self.sarfa_frame_buffer.append(sarfa_frame)
+        # 2. SARFA-Frame ist jetzt fertig gebaut (durch set_value())
+        self.sarfa_frame_buffer.append(self._current_sarfa_frame.copy())
 
         # 3. Create SARFA stack (4, 84, 84)
         sarfa_obs = np.array(self.sarfa_frame_buffer)
@@ -168,40 +187,6 @@ class SarfaDualWrapper(MaskedBaseWrapper):
             score = sarfa_saliency(original_output, perturbed_output, action_index)
             self.sarfa_map[y_min:y_max, x_min:x_max] = score
 
-    def _build_sarfa_frame(self):
-        """Build a single SARFA-weighted frame based on current objects and saliency map."""
-        sarfa_frame = np.zeros((84, 84), dtype=np.uint8)
-
-        for obj in self.env.objects:
-            if obj is None or obj.category == "NoObject":
-                continue
-
-            x, y, w, h = obj.xywh
-            height_orig, width_orig = 210, 160
-            height_grad, width_grad = 84, 84
-            y_min = int(y * height_grad / height_orig)
-            y_max = int((y + h) * height_grad / height_orig)
-            x_min = int(x * width_grad / width_orig)
-            x_max = int((x + w) * width_grad / width_orig)
-
-            if y_max <= y_min or x_max <= x_min:
-                continue
-            if y_min < 0 or x_min < 0 or y_max > 84 or x_max > 84:
-                continue
-
-            saliency = self._get_object_saliency(y_min, y_max, x_min, x_max)
-
-            if self.use_gamma:
-                saliency = np.power(np.clip(saliency, 0.0, 1.0), self.gamma)
-
-            intensity = int(255 * np.clip(saliency, 0.0, 1.0))
-
-            if not self.use_gamma:
-                intensity = max(self.min_visible, intensity)
-
-            sarfa_frame[y_min:y_max, x_min:x_max] = intensity
-
-        return sarfa_frame
 
     def _get_object_saliency(self, y_min, y_max, x_min, x_max):
         if self.sarfa_map is None:
