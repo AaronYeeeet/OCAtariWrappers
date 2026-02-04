@@ -80,7 +80,7 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         )
 
         # SARFA intensity settings
-        self.min_visible = 40
+        self.min_visible = 0
         self.use_gamma = False
         self.gamma = 0.5
 
@@ -96,8 +96,8 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         # 1. Get binary observation from parent (4, 84, 84)
         binary_obs = super().observation(observation)
 
-        # 2. Build SARFA-weighted frame for current step
-        sarfa_frame = self._build_sarfa_frame()
+        # 2. Render SARFA frame directly from existing map
+        sarfa_frame = self._render_sarfa_frame()
         self.sarfa_frame_buffer.append(sarfa_frame)
 
         # 3. Create SARFA stack (4, 84, 84)
@@ -113,7 +113,7 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         return combined_obs
 
     def _compute_sarfa_map(self, current_obs):
-        """Compute SARFA saliency map using current 8-channel observation."""
+        """Compute SARFA saliency map using batch GPU inference."""
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(current_obs).unsqueeze(0) / 255.0
 
@@ -126,6 +126,10 @@ class SarfaDualWrapper(MaskedBaseWrapper):
 
         action_index = np.argmax(original_output)
         self.sarfa_map = np.zeros((84, 84), dtype=np.float32)
+
+        # Collect all valid objects and their perturbations FIRST (before GPU inference)
+        perturbed_obs_list = []
+        valid_objects = []
 
         for obj in self.env.objects:
             if obj is None or obj.category == "NoObject":
@@ -155,71 +159,33 @@ class SarfaDualWrapper(MaskedBaseWrapper):
             else:
                 perturbed_obs[:, y_min:y_max, x_min:x_max] = 0
 
-            with torch.no_grad():
-                perturbed_tensor = torch.FloatTensor(perturbed_obs).unsqueeze(0) / 255.0
+            perturbed_obs_list.append(perturbed_obs)
+            valid_objects.append((y_min, y_max, x_min, x_max))
 
-                if next(self.model.parameters()).is_cuda:
-                    perturbed_tensor = perturbed_tensor.cuda()
+        # Batch GPU inference for all perturbed observations
+        if perturbed_obs_list:
+            batch_tensor = torch.FloatTensor(np.stack(perturbed_obs_list)) / 255.0
 
-                hidden = self.model.network(perturbed_tensor)
-                logits = self.model.actor(hidden)
-                perturbed_output = logits.cpu().numpy()
+            if next(self.model.parameters()).is_cuda:
+                batch_tensor = batch_tensor.cuda()
 
-            score = sarfa_saliency(original_output, perturbed_output, action_index)
-            self.sarfa_map[y_min:y_max, x_min:x_max] = score
+            hidden = self.model.network(batch_tensor)
+            logits = self.model.actor(hidden)
+            perturbed_outputs = logits.cpu().numpy()
 
-    def _build_sarfa_frame(self):
-        """Build a single SARFA-weighted frame based on current objects and saliency map."""
-        sarfa_frame = np.zeros((84, 84), dtype=np.uint8)
+            # Assign saliency scores to map
+            for (y_min, y_max, x_min, x_max), perturbed_output in zip(valid_objects, perturbed_outputs):
+                score = sarfa_saliency(original_output, perturbed_output, action_index)
+                self.sarfa_map[y_min:y_max, x_min:x_max] = score
 
-        for obj in self.env.objects:
-            if obj is None or obj.category == "NoObject":
-                continue
-
-            x, y, w, h = obj.xywh
-            height_orig, width_orig = 210, 160
-            height_grad, width_grad = 84, 84
-            y_min = int(y * height_grad / height_orig)
-            y_max = int((y + h) * height_grad / height_orig)
-            x_min = int(x * width_grad / width_orig)
-            x_max = int((x + w) * width_grad / width_orig)
-
-            if y_max <= y_min or x_max <= x_min:
-                continue
-            if y_min < 0 or x_min < 0 or y_max > 84 or x_max > 84:
-                continue
-
-            saliency = self._get_object_saliency(y_min, y_max, x_min, x_max)
-
-            if self.use_gamma:
-                saliency = np.power(np.clip(saliency, 0.0, 1.0), self.gamma)
-
-            intensity = int(255 * np.clip(saliency, 0.0, 1.0))
-
-            if not self.use_gamma:
-                intensity = max(self.min_visible, intensity)
-
-            sarfa_frame[y_min:y_max, x_min:x_max] = intensity
-
-        return sarfa_frame
-
-    def _get_object_saliency(self, y_min, y_max, x_min, x_max):
+    def _render_sarfa_frame(self):
+        """Render frame directly from existing sarfa_map."""
         if self.sarfa_map is None:
-            return 1.0  # Default to full visibility before SARFA is computed
+            return np.zeros((84, 84), dtype=np.uint8)
 
-        object_scores = self.sarfa_map[y_min:y_max, x_min:x_max]
+        # Direct conversion: map to frame
+        return (255 * np.clip(self.sarfa_map, 0.0, 1.0)).astype(np.uint8)
 
-        if object_scores.size > 0:
-            mean_score = object_scores.mean()
-        else:
-            mean_score = 0
-
-        max_score = self.sarfa_map.max()
-        if max_score > 0:
-            saliency = mean_score / max_score
-        else:
-            saliency = 1.0
-        return float(saliency)
 
     def reset(self, **kwargs):
         """Reset environment and clear buffers."""
