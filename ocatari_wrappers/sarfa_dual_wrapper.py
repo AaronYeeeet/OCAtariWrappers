@@ -11,12 +11,10 @@ Channels 4-7: SARFA-weighted frames
 
 import numpy as np
 import torch
-import cv2
 from gymnasium import spaces
 from collections import deque
 from scipy.special import softmax
 from scipy.stats import entropy
-from scipy.ndimage import gaussian_filter
 from ocatari_wrappers.masked_dqn import MaskedBaseWrapper
 
 
@@ -68,9 +66,13 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         self.radius = radius
 
         self.sarfa_map = None
+        self._cached_sarfa_frame = np.zeros((84, 84), dtype=np.uint8)
 
         # SARFA frame buffer (separate from binary buffer in parent)
         self.sarfa_frame_buffer = deque(maxlen=self.buffer_window_size)
+
+        # Pre-allocate output array to avoid concatenation overhead
+        self._combined_obs = np.zeros((self.buffer_window_size * 2, 84, 84), dtype=np.uint8)
 
         # Override observation space to 8 channels
         self.observation_space = spaces.Box(
@@ -79,8 +81,12 @@ class SarfaDualWrapper(MaskedBaseWrapper):
             dtype=np.uint8
         )
 
+        # SARFA computation interval - only recompute every N steps
+        self.sarfa_compute_interval = 4  # Recompute every 4 steps (same as frame stack)
+        self.steps_since_sarfa = 0
+
         # SARFA intensity settings
-        self.min_visible = 0
+        self.min_visible = 40  # Minimum intensity - objects never fully invisible
         self.use_gamma = False
         self.gamma = 0.5
 
@@ -93,33 +99,35 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         self.state[0, y_min:y_max, x_min:x_max].fill(255)
 
     def observation(self, observation):
-        # 1. Get binary observation from parent (4, 84, 84)
+        # 1. Get binary observation from parent
         binary_obs = super().observation(observation)
+        n_binary = binary_obs.shape[0]
 
-        # 2. Render SARFA frame directly from existing map
-        sarfa_frame = self._render_sarfa_frame()
-        self.sarfa_frame_buffer.append(sarfa_frame)
+        # 2. Add current cached SARFA frame to buffer
+        self.sarfa_frame_buffer.append(self._cached_sarfa_frame.copy())
 
-        # 3. Create SARFA stack (4, 84, 84)
-        sarfa_obs = np.array(self.sarfa_frame_buffer)
+        # 3. Write into pre-allocated array
+        self._combined_obs[:n_binary] = binary_obs
+        for i, frame in enumerate(self.sarfa_frame_buffer):
+            self._combined_obs[4 + i] = frame
 
-        # 4. Combine: binary (4, 84, 84) + SARFA (4, 84, 84) = (8, 84, 84)
-        combined_obs = np.concatenate([binary_obs, sarfa_obs], axis=0)
+        # 4. Compute SARFA map every N steps (updates _cached_sarfa_frame for NEXT observation)
+        if (self.model is not None and
+            n_binary == self.buffer_window_size and
+            len(self.sarfa_frame_buffer) == self.buffer_window_size):
+            self.steps_since_sarfa += 1
+            if self.steps_since_sarfa >= self.sarfa_compute_interval:
+                self._compute_sarfa_map(self._combined_obs)
+                self.steps_since_sarfa = 0
 
-        # 5. Compute SARFA map for NEXT step (uses current combined obs)
-        if self.model is not None and len(self.sarfa_frame_buffer) == self.buffer_window_size:
-            self._compute_sarfa_map(combined_obs)
-
-        return combined_obs
+        return self._combined_obs
 
     def _compute_sarfa_map(self, current_obs):
         """Compute SARFA saliency map using batch GPU inference."""
+        device = next(self.model.parameters()).device
+
         with torch.no_grad():
-            obs_tensor = torch.FloatTensor(current_obs).unsqueeze(0) / 255.0
-
-            if next(self.model.parameters()).is_cuda:
-                obs_tensor = obs_tensor.cuda()
-
+            obs_tensor = torch.FloatTensor(current_obs).unsqueeze(0).to(device) / 255.0
             hidden = self.model.network(obs_tensor)
             logits = self.model.actor(hidden)
             original_output = logits.cpu().numpy()
@@ -127,64 +135,60 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         action_index = np.argmax(original_output)
         self.sarfa_map = np.zeros((84, 84), dtype=np.float32)
 
-        # Collect all valid objects and their perturbations FIRST (before GPU inference)
-        perturbed_obs_list = []
+        # Collect valid object bounding boxes first
         valid_objects = []
-
         for obj in self.env.objects:
             if obj is None or obj.category == "NoObject":
                 continue
 
             x, y, w, h = obj.xywh
-            height_orig, width_orig = 210, 160
-            height_grad, width_grad = 84, 84
-            y_min = int(y * height_grad / height_orig)
-            y_max = int((y + h) * height_grad / height_orig)
-            x_min = int(x * width_grad / width_orig)
-            x_max = int((x + w) * width_grad / width_orig)
+            y_min = int(y * 84 / 210)
+            y_max = int((y + h) * 84 / 210)
+            x_min = int(x * 84 / 160)
+            x_max = int((x + w) * 84 / 160)
 
             if y_max - y_min < 1 or x_max - x_min < 1:
                 continue
             if y_min < 0 or x_min < 0 or y_max > 84 or x_max > 84:
                 continue
 
-            perturbed_obs = current_obs.copy()
-
-            if self.use_blur:
-                for frame_idx in range(perturbed_obs.shape[0]):
-                    object_region = perturbed_obs[frame_idx, y_min:y_max, x_min:x_max]
-                    if object_region.size > 0:
-                        blurred = gaussian_filter(object_region.astype(float), sigma=self.radius)
-                        perturbed_obs[frame_idx, y_min:y_max, x_min:x_max] = blurred.astype(np.uint8)
-            else:
-                perturbed_obs[:, y_min:y_max, x_min:x_max] = 0
-
-            perturbed_obs_list.append(perturbed_obs)
             valid_objects.append((y_min, y_max, x_min, x_max))
 
-        # Batch GPU inference for all perturbed observations
-        if perturbed_obs_list:
-            batch_tensor = torch.FloatTensor(np.stack(perturbed_obs_list)) / 255.0
+        if not valid_objects:
+            self._cached_sarfa_frame.fill(0)
+            return
 
-            if next(self.model.parameters()).is_cuda:
-                batch_tensor = batch_tensor.cuda()
+        # Pre-allocate batch tensor directly on GPU
+        n_objects = len(valid_objects)
+        batch_tensor = torch.FloatTensor(current_obs).unsqueeze(0).expand(n_objects, -1, -1, -1).clone().to(device) / 255.0
 
+        # Apply occlusion directly on tensor
+        for i, (y_min, y_max, x_min, x_max) in enumerate(valid_objects):
+            batch_tensor[i, :, y_min:y_max, x_min:x_max] = 0
+
+        # Single batched forward pass
+        with torch.no_grad():
             hidden = self.model.network(batch_tensor)
             logits = self.model.actor(hidden)
-            perturbed_outputs = logits.detach().cpu().numpy()
+            perturbed_outputs = logits.cpu().numpy()
 
-            # Assign saliency scores to map
-            for (y_min, y_max, x_min, x_max), perturbed_output in zip(valid_objects, perturbed_outputs):
-                score = sarfa_saliency(original_output, perturbed_output, action_index)
-                self.sarfa_map[y_min:y_max, x_min:x_max] = score
+        # Assign saliency scores to map AND track object regions
+        object_mask = np.zeros((84, 84), dtype=bool)
+        for (y_min, y_max, x_min, x_max), perturbed_output in zip(valid_objects, perturbed_outputs):
+            score = sarfa_saliency(original_output, perturbed_output, action_index)
+            self.sarfa_map[y_min:y_max, x_min:x_max] = score
+            object_mask[y_min:y_max, x_min:x_max] = True
 
-    def _render_sarfa_frame(self):
-        """Render frame directly from existing sarfa_map."""
-        if self.sarfa_map is None:
-            return np.zeros((84, 84), dtype=np.uint8)
+        # Normalize saliency map
+        max_score = self.sarfa_map.max()
+        if max_score > 0:
+            self.sarfa_map /= max_score
 
-        # Direct conversion: map to frame
-        return (255 * np.clip(self.sarfa_map, 0.0, 1.0)).astype(np.uint8)
+        # Cache the rendered frame with min_visible floor for ALL objects
+        frame = (self.sarfa_map * 255).astype(np.uint8)
+        # Apply minimum visibility - ALL objects should never be completely invisible
+        frame[object_mask] = np.maximum(frame[object_mask], self.min_visible)
+        self._cached_sarfa_frame[:] = frame
 
 
     def reset(self, **kwargs):
@@ -194,6 +198,8 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         # Clear SARFA state
         self.sarfa_frame_buffer.clear()
         self.sarfa_map = None
+        self._cached_sarfa_frame.fill(0)
+        self.steps_since_sarfa = 0
 
         # Initialize SARFA buffer with empty frames
         for _ in range(self.buffer_window_size):
