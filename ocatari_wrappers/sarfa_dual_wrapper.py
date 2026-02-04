@@ -171,7 +171,7 @@ class SarfaDualWrapper(MaskedBaseWrapper):
 
             hidden = self.model.network(batch_tensor)
             logits = self.model.actor(hidden)
-            perturbed_outputs = logits.cpu().numpy()
+            perturbed_outputs = logits.detach().cpu().numpy()
 
             # Assign saliency scores to map
             for (y_min, y_max, x_min, x_max), perturbed_output in zip(valid_objects, perturbed_outputs):
