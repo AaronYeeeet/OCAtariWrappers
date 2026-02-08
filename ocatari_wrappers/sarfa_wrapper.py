@@ -11,7 +11,7 @@ from collections import deque
 from scipy.special import softmax
 from scipy.stats import entropy
 from scipy.ndimage import gaussian_filter
-from ocatari_wrappers.masked_dqn import MaskedBaseWrapper
+from ocatari_wrappers.masked_dqn import BinaryMaskWrapper
 
 
 def cross_entropy(original_output, perturbed_output, action_index):
@@ -55,7 +55,7 @@ def sarfa_saliency(original_output, perturbed_output, action_index):
         return 0
 
 
-class SarfaSaliencyWrapper(MaskedBaseWrapper):
+class SarfaSaliencyWrapper(BinaryMaskWrapper):
     """
     Saliency per object
     """
@@ -76,9 +76,7 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         self.radius = radius
         self.use_binary_mask = use_binary_mask
 
-
-        self.sarfa_map = None
-        # two buffers for normal and masked frames
+        # buffer for raw grayscale frames (only needed when not using binary mask)
         if not use_binary_mask:
             self.raw_buffer = deque(maxlen=self.buffer_window_size)
 
@@ -87,7 +85,7 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         self.sarfa_step_counter = 0
         self.min_visible = 40  # Minimum intensity after fade-in (0-255), objects never fully invisible
         # 0 for normal without minimum visibility
-        # Power function for non-linear saliency transformation
+
         self.use_gamma = False  # use power function instead of min_visible
         self.gamma = 0.5  # gamma < 1 hebt niedrige Werte an, gamma > 1 senkt sie (0.5 = Quadratwurzel)
 
@@ -102,20 +100,39 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
             raw_frame_resized = cv2.resize(raw_frame, (84, 84), interpolation=cv2.INTER_AREA)
             self.raw_buffer.append(raw_frame_resized)
 
-        # 2. Compute SARFA map if buffer is full
+        # 2. Prepare state array (like MaskedBaseWrapper.observation())
+        self.state = np.zeros(self.working_shape, dtype=np.uint8)
+
+        # 3. Compute SARFA and fill state directly (no double iteration!)
         if not self.use_binary_mask:
             if self.model is not None and len(self.raw_buffer) == self.buffer_window_size:
                 self._compute_sarfa_map()
+            else:
+                self._fill_state_white()  # Fallback: white boxes until buffer is full
         else:
             if self.model is not None and len(self._buffer) == self.buffer_window_size:
                 self._compute_sarfa_map()
+            else:
+                self._fill_state_white()  # Fallback: white boxes until buffer is full
 
         if self.use_fade_in:
             self.sarfa_step_counter += 1
 
-        return super().observation(observation)
+        # Skip parent's observation() - we already filled self.state!
+        return self.create_obs(self.state)
+
+    def _fill_state_white(self):
+        """Fallback: Fill all objects with white (255) until SARFA is ready."""
+        for obj in self.env.objects:
+            if obj is None or obj.category == "NoObject":
+                continue
+            x, y, w, h = obj.xywh
+            y_min, y_max, x_min, x_max = self.calc_limits(x, y, x + w, y + h)
+            if y_max > y_min and x_max > x_min:
+                self.state[0, y_min:y_max, x_min:x_max].fill(255)
 
     def _compute_sarfa_map(self):
+        """Compute SARFA scores and fill self.state directly - single iteration over objects."""
         # Choose frame source based on use_binary_mask flag
         if self.use_binary_mask:
             current_obs = np.asarray(self._buffer)  # Binary masked frames
@@ -137,12 +154,10 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
         # Get the action being explained
         action_index = np.argmax(original_output)
 
-        # Create 2D saliency map (84x84)
-        self.sarfa_map = np.zeros((84, 84), dtype=np.float32)
+        # First pass: collect all SARFA scores for normalization
+        object_scores = []
+        object_coords = []
 
-        # iterate all objects
-        # remove or blur them in the observation
-        # compute sarfa map with each object pertubed once
         for obj in self.env.objects:
             if obj is None or obj.category == "NoObject":
                 continue
@@ -150,31 +165,29 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
             x, y, w, h = obj.xywh
             height_orig, width_orig = 210, 160
             height_grad, width_grad = 84, 84
-            y_min = int(y * height_grad / height_orig)
-            y_max = int((y + h) * height_grad / height_orig)
-            x_min = int(x * width_grad / width_orig)
-            x_max = int((x + w) * width_grad / width_orig)
+            y_min_obs = int(y * height_grad / height_orig)
+            y_max_obs = int((y + h) * height_grad / height_orig)
+            x_min_obs = int(x * width_grad / width_orig)
+            x_max_obs = int((x + w) * width_grad / width_orig)
 
             # skip invalid objects
-            if y_max - y_min < 1 or x_max - x_min < 1:
+            if y_max_obs - y_min_obs < 1 or x_max_obs - x_min_obs < 1:
                 continue
-            if y_min < 0 or x_min < 0 or y_max > 84 or x_max > 84:
+            if y_min_obs < 0 or x_min_obs < 0 or y_max_obs > 84 or x_max_obs > 84:
                 continue
-
 
             perturbed_obs = current_obs.copy()
 
             if self.use_blur:
                 # blur entire object region, radius is only intesity
                 for frame_idx in range(perturbed_obs.shape[0]):
-                    object_region = perturbed_obs[frame_idx, y_min:y_max, x_min:x_max]
+                    object_region = perturbed_obs[frame_idx, y_min_obs:y_max_obs, x_min_obs:x_max_obs]
                     if object_region.size > 0:
                         blurred = gaussian_filter(object_region.astype(float), sigma=self.radius)
-                        perturbed_obs[frame_idx, y_min:y_max, x_min:x_max] = blurred.astype(np.uint8)
+                        perturbed_obs[frame_idx, y_min_obs:y_max_obs, x_min_obs:x_max_obs] = blurred.astype(np.uint8)
             else:
                 # occlude entire object
-                perturbed_obs[:, y_min:y_max, x_min:x_max] = 0
-
+                perturbed_obs[:, y_min_obs:y_max_obs, x_min_obs:x_max_obs] = 0
 
             with torch.no_grad():
                 perturbed_tensor = torch.FloatTensor(perturbed_obs).unsqueeze(0) / 255.0
@@ -189,63 +202,39 @@ class SarfaSaliencyWrapper(MaskedBaseWrapper):
 
             # score for current object
             score = sarfa_saliency(original_output, perturbed_output, action_index)
-            self.sarfa_map[y_min:y_max, x_min:x_max] = score
 
-    def set_value(self, y_min, y_max, x_min, x_max, o):
-        saliency = self._get_object_saliency(y_min, y_max, x_min, x_max)
+            # Get state coordinates (using parent's calc_limits)
+            y_min_state, y_max_state, x_min_state, x_max_state = self.calc_limits(x, y, x + w, y + h)
 
-        # Apply gamma transformation if enabled (before intensity calculation)
-        if self.use_gamma:
-            saliency = np.power(np.clip(saliency, 0.0, 1.0), self.gamma)
+            object_scores.append(score)
+            object_coords.append((y_min_state, y_max_state, x_min_state, x_max_state))
 
-        intensity = int(255 * np.clip(saliency, 0.0, 1.0))
-        # Original logic: replacing the object slice with a flat intensity value
-        if self.use_fade_in and self.sarfa_step_counter < self.fade_in_steps:
-            # Calculate alpha (0.0 at step 0, 1.0 at fade_in_steps)
-            # alpha=0.0 -> full white (255)
-            # alpha=1.0 -> full SARFA intensity
-            alpha = min(1.0, self.sarfa_step_counter / self.fade_in_steps)
+        # Normalize and fill state
+        max_score = max(object_scores) if object_scores else 0
 
-            # Blend: start from white (255), fade to SARFA intensity
-            blended_intensity = int((1.0 - alpha) * 255 + alpha * intensity)
-            self.state[0, y_min:y_max, x_min:x_max].fill(blended_intensity)
-        else:
-            # After fade-in, enforce a minimum floor if not using gamma
+        for score, (y_min, y_max, x_min, x_max) in zip(object_scores, object_coords):
+            # Normalize
+            if max_score > 0:
+                saliency = score / max_score
+            else:
+                saliency = 0
+
+            # Apply gamma transformation if enabled
             if self.use_gamma:
-                self.state[0, y_min:y_max, x_min:x_max].fill(intensity)
+                saliency = np.power(np.clip(saliency, 0.0, 1.0), self.gamma)
+
+            intensity = int(255 * np.clip(saliency, 0.0, 1.0))
+
+            # Calculate final intensity with fade-in or min_visible
+            if self.use_fade_in and self.sarfa_step_counter < self.fade_in_steps:
+                alpha = min(1.0, self.sarfa_step_counter / self.fade_in_steps)
+                final_intensity = int((1.0 - alpha) * 255 + alpha * intensity)
+            elif self.use_gamma:
+                final_intensity = intensity
             else:
                 final_intensity = max(self.min_visible, intensity)
+
+            # Fill state directly
+            if y_max > y_min and x_max > x_min:
                 self.state[0, y_min:y_max, x_min:x_max].fill(final_intensity)
 
-    def _get_object_saliency(self, y_min, y_max, x_min, x_max):
-        # not none when buffer full
-        if self.sarfa_map is None:
-            return 0
-
-        # transform atari frame to 84,84
-        height_orig, width_orig = self.state.shape[1], self.state.shape[2]
-        height_grad, width_grad = self.sarfa_map.shape
-        y_min_scaled = int(y_min * height_grad / height_orig)
-        y_max_scaled = int(y_max * height_grad / height_orig)
-        x_min_scaled = int(x_min * width_grad / width_orig)
-        x_max_scaled = int(x_max * width_grad / width_orig)
-
-        # Safety Check: ensure slice is never empty
-        if y_max_scaled <= y_min_scaled: y_max_scaled = y_min_scaled + 1
-        if x_max_scaled <= x_min_scaled: x_max_scaled = x_min_scaled + 1
-
-        object_scores = self.sarfa_map[y_min_scaled:y_max_scaled,
-                                       x_min_scaled:x_max_scaled]
-
-        if object_scores.size > 0:
-            mean_score = object_scores.mean()
-        else:
-            mean_score = 0
-
-        # normalization
-        max_score = self.sarfa_map.max()
-        if max_score > 0:
-            saliency = mean_score / max_score
-        else:
-            saliency = 0
-        return float(saliency)
