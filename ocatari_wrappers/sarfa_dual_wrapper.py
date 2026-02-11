@@ -61,14 +61,20 @@ class SarfaDualWrapper(BinaryMaskWrapper):
     - Channel 4: SARFA saliency map computed from channels 0-3
     """
 
-    def __init__(self, env, trained_model=None, compute_every_step=False, *args, **kwargs):
+    def __init__(self, env, trained_model=None, compute_every_step=False,
+                 use_blur=False, radius=3, *args, **kwargs):
         """
         Args:
             env: The environment to wrap (must have OCAtari in stack)
             trained_model: Trained PPO/DQN model for saliency computation
             compute_every_step: If True, recompute SARFA every step. If False, every 4 steps.
+            use_blur: (unused, kept for API compatibility with sarfa_wrapper)
+            radius: (unused, kept for API compatibility with sarfa_wrapper)
         """
-        super().__init__(env, *args, **kwargs)
+        # Filter out kwargs that MaskedBaseWrapper doesn't accept
+        valid_kwargs = {k: v for k, v in kwargs.items()
+                        if k not in ['use_blur', 'radius', 'use_binary_mask']}
+        super().__init__(env, *args, **valid_kwargs)
         self.model = trained_model
         self.compute_every_step = compute_every_step
 
