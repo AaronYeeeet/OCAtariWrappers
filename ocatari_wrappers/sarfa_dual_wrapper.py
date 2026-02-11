@@ -1,21 +1,28 @@
 """
-SARFA Dual-Channel Wrapper for OCAtari.
-Provides the agent with BOTH:
-1. Binary object mask (standard OCAtari representation)
-2. SARFA-weighted object mask (saliency-based intensity)
+SARFA 5-Channel Wrapper for OCAtari.
+Designed for TRAINING FROM SCRATCH - no pre-trained agent required!
 
-The observation space is doubled: (8, 84, 84) instead of (4, 84, 84)
-Channels 0-3: Binary mask frames
-Channels 4-7: SARFA-weighted frames
+Provides the agent with:
+1. Binary object mask (4 channels - standard OCAtari frame stack)
+2. Single SARFA-weighted frame (1 channel - computed from all 4 binary frames)
+
+The observation space is: (5, 84, 84)
+Channels 0-3: Binary mask frames (frame stack)
+Channel 4: SARFA saliency map (computed from channels 0-3)
+
+Training workflow:
+1. Create env with SarfaDualWrapper (model=None initially)
+2. Create agent with 5-channel input
+3. Call env.set_model(agent) to enable SARFA computation
+4. Train normally - SARFA channel updates during training
 """
 
 import numpy as np
 import torch
 from gymnasium import spaces
-from collections import deque
 from scipy.special import softmax
 from scipy.stats import entropy
-from ocatari_wrappers.masked_dqn import MaskedBaseWrapper
+from ocatari_wrappers.masked_dqn import BinaryMaskWrapper
 
 
 def cross_entropy(original_output, perturbed_output, action_index):
@@ -46,49 +53,44 @@ def sarfa_saliency(original_output, perturbed_output, action_index):
         return 0
 
 
-class SarfaDualWrapper(MaskedBaseWrapper):
+class SarfaDualWrapper(BinaryMaskWrapper):
     """
-    Dual-channel wrapper: Binary + SARFA-weighted frames.
-    Output shape: (8, 84, 84) - first 4 channels binary, last 4 channels SARFA-weighted.
+    5-channel wrapper: 4 Binary frames + 1 SARFA saliency frame.
+    Output shape: (5, 84, 84)
+    - Channels 0-3: Binary mask frames (frame stack from parent)
+    - Channel 4: SARFA saliency map computed from channels 0-3
     """
 
-    def __init__(self, env, trained_model=None, use_blur=False, radius=3, *args, **kwargs):
+    def __init__(self, env, trained_model=None, compute_every_step=False, *args, **kwargs):
         """
         Args:
             env: The environment to wrap (must have OCAtari in stack)
             trained_model: Trained PPO/DQN model for saliency computation
-            use_blur: If True, use blur perturbation instead of occlusion
-            radius: Radius for intensity of blur
+            compute_every_step: If True, recompute SARFA every step. If False, every 4 steps.
         """
         super().__init__(env, *args, **kwargs)
         self.model = trained_model
-        self.use_blur = use_blur
-        self.radius = radius
+        self.compute_every_step = compute_every_step
 
         self.sarfa_map = None
         self._cached_sarfa_frame = np.zeros((84, 84), dtype=np.uint8)
 
-        # SARFA frame buffer (separate from binary buffer in parent)
-        self.sarfa_frame_buffer = deque(maxlen=self.buffer_window_size)
+        # Pre-allocate output array: 4 binary + 1 SARFA = 5 channels
+        self._combined_obs = np.zeros((5, 84, 84), dtype=np.uint8)
 
-        # Pre-allocate output array to avoid concatenation overhead
-        self._combined_obs = np.zeros((self.buffer_window_size * 2, 84, 84), dtype=np.uint8)
-
-        # Override observation space to 8 channels
+        # Override observation space to 5 channels
         self.observation_space = spaces.Box(
             low=0, high=255,
-            shape=(self.buffer_window_size * 2, 84, 84),  # 8 channels
+            shape=(5, 84, 84),
             dtype=np.uint8
         )
 
-        # SARFA computation interval - only recompute every N steps
-        self.sarfa_compute_interval = 4  # Recompute every 4 steps (same as frame stack)
+        # SARFA computation interval
+        self.sarfa_compute_interval = 1 if compute_every_step else 4
         self.steps_since_sarfa = 0
 
         # SARFA intensity settings
         self.min_visible = 40  # Minimum intensity - objects never fully invisible
-        self.use_gamma = False
-        self.gamma = 0.5
 
     def set_model(self, model):
         """Allows injecting the agent after environment creation"""
@@ -99,35 +101,40 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         self.state[0, y_min:y_max, x_min:x_max].fill(255)
 
     def observation(self, observation):
-        # 1. Get binary observation from parent
+        # 1. Get binary observation from parent (may be less than 4 channels during buffer fill)
         binary_obs = super().observation(observation)
         n_binary = binary_obs.shape[0]
 
-        # 2. Add current cached SARFA frame to buffer
-        self.sarfa_frame_buffer.append(self._cached_sarfa_frame.copy())
-
-        # 3. Write into pre-allocated array
+        # 2. Write binary frames into combined obs (handle partial buffer)
         self._combined_obs[:n_binary] = binary_obs
-        for i, frame in enumerate(self.sarfa_frame_buffer):
-            self._combined_obs[4 + i] = frame
 
-        # 4. Compute SARFA map every N steps (updates _cached_sarfa_frame for NEXT observation)
-        if (self.model is not None and
-            n_binary == self.buffer_window_size and
-            len(self.sarfa_frame_buffer) == self.buffer_window_size):
+        # 3. Add cached SARFA frame as 5th channel
+        self._combined_obs[4] = self._cached_sarfa_frame
+
+        # 4. Compute SARFA map based on interval (only when buffer is full)
+        if self.model is not None and n_binary == self.buffer_window_size:
             self.steps_since_sarfa += 1
             if self.steps_since_sarfa >= self.sarfa_compute_interval:
-                self._compute_sarfa_map(self._combined_obs)
+                self._compute_sarfa_map(binary_obs)
                 self.steps_since_sarfa = 0
 
         return self._combined_obs
 
-    def _compute_sarfa_map(self, current_obs):
-        """Compute SARFA saliency map using batch GPU inference."""
+    def _compute_sarfa_map(self, binary_obs):
+        """
+        Compute SARFA saliency map from the 4 binary frames.
+        Uses batched GPU inference for efficiency.
+        """
         device = next(self.model.parameters()).device
 
+        # Build 5-channel input for model (4 binary + current cached SARFA)
+        model_input = np.zeros((5, 84, 84), dtype=np.uint8)
+        model_input[:4] = binary_obs
+        model_input[4] = self._cached_sarfa_frame
+
+        # Get original Q-values
         with torch.no_grad():
-            obs_tensor = torch.FloatTensor(current_obs).unsqueeze(0).to(device) / 255.0
+            obs_tensor = torch.FloatTensor(model_input).unsqueeze(0).to(device) / 255.0
             hidden = self.model.network(obs_tensor)
             logits = self.model.actor(hidden)
             original_output = logits.cpu().numpy()
@@ -135,7 +142,7 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         action_index = np.argmax(original_output)
         self.sarfa_map = np.zeros((84, 84), dtype=np.float32)
 
-        # Collect valid object bounding boxes first
+        # Collect valid object bounding boxes
         valid_objects = []
         for obj in self.env.objects:
             if obj is None or obj.category == "NoObject":
@@ -158,11 +165,11 @@ class SarfaDualWrapper(MaskedBaseWrapper):
             self._cached_sarfa_frame.fill(0)
             return
 
-        # Pre-allocate batch tensor directly on GPU
+        # Batched inference: create perturbed versions for all objects
         n_objects = len(valid_objects)
-        batch_tensor = torch.FloatTensor(current_obs).unsqueeze(0).expand(n_objects, -1, -1, -1).clone().to(device) / 255.0
+        batch_tensor = torch.FloatTensor(model_input).unsqueeze(0).expand(n_objects, -1, -1, -1).clone().to(device) / 255.0
 
-        # Apply occlusion directly on tensor
+        # Apply occlusion: set object region to 0 in ALL 5 channels for each object
         for i, (y_min, y_max, x_min, x_max) in enumerate(valid_objects):
             batch_tensor[i, :, y_min:y_max, x_min:x_max] = 0
 
@@ -172,7 +179,7 @@ class SarfaDualWrapper(MaskedBaseWrapper):
             logits = self.model.actor(hidden)
             perturbed_outputs = logits.cpu().numpy()
 
-        # Assign saliency scores to map AND track object regions
+        # Assign saliency scores to map
         object_mask = np.zeros((84, 84), dtype=bool)
         for (y_min, y_max, x_min, x_max), perturbed_output in zip(valid_objects, perturbed_outputs):
             score = sarfa_saliency(original_output, perturbed_output, action_index)
@@ -184,28 +191,21 @@ class SarfaDualWrapper(MaskedBaseWrapper):
         if max_score > 0:
             self.sarfa_map /= max_score
 
-        # Cache the rendered frame with min_visible floor for ALL objects
+        # Cache the rendered frame with min_visible floor
         frame = (self.sarfa_map * 255).astype(np.uint8)
-        # Apply minimum visibility - ALL objects should never be completely invisible
         frame[object_mask] = np.maximum(frame[object_mask], self.min_visible)
         self._cached_sarfa_frame[:] = frame
-
 
     def reset(self, **kwargs):
         """Reset environment and clear buffers."""
         obs, info = self.env.reset(**kwargs)
 
         # Clear SARFA state
-        self.sarfa_frame_buffer.clear()
         self.sarfa_map = None
         self._cached_sarfa_frame.fill(0)
         self.steps_since_sarfa = 0
 
-        # Initialize SARFA buffer with empty frames
-        for _ in range(self.buffer_window_size):
-            self.sarfa_frame_buffer.append(np.zeros((84, 84), dtype=np.uint8))
-
-        # Fill binary buffer (parent's _buffer) by calling observation
+        # Fill binary buffer by calling observation multiple times
         for _ in range(self.buffer_window_size):
             final_obs = self.observation(obs)
 
