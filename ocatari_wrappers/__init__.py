@@ -3,7 +3,7 @@ from .frostbite import *
 from .saliency_guided_wrapper import GradientSaliencyWrapper
 from .sarfa import SarfaExplainer
 from .sarfa_wrapper import SarfaSaliencyWrapper
-from .sarfa_dual_wrapper import SarfaDualWrapper
+from .sarfa_dual import SarfaDualWrapperFive, SarfaDualWrapperEight
 
 # aliales to match the names in the paper
 from .masked_dqn import (
