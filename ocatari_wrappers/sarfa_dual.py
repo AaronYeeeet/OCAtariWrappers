@@ -117,8 +117,23 @@ class _SarfaDualBase(MaskedBaseWrapper):
 class SarfaDualWrapperFive(_SarfaDualBase):
 	"""5-channel wrapper: binary stack + current SARFA frame (typically 4 + 1)."""
 
-	def __init__(self, env, trained_model=None, *args, **kwargs):
-		super().__init__(env, trained_model=trained_model, *args, **kwargs)
+	def __init__(
+		self,
+		env,
+		trained_model=None,
+		sarfa_compute_interval=4,
+		compute_every_step=None,
+		*args,
+		**kwargs,
+	):
+		super().__init__(
+			env,
+			trained_model=trained_model,
+			sarfa_compute_interval=sarfa_compute_interval,
+			compute_every_step=compute_every_step,
+			*args,
+			**kwargs,
+		)
 		self._binary_channels = self._buffer.maxlen
 		self._combined_obs = np.zeros((self._binary_channels + 1, 84, 84), dtype=np.uint8)
 		self.observation_space = spaces.Box(
