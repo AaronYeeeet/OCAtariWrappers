@@ -132,14 +132,15 @@ class SarfaDualWrapperFive(_SarfaDualBase):
 		binary_obs = super().observation(observation)
 		n_binary = binary_obs.shape[0]
 
-		self._combined_obs[:n_binary] = binary_obs
-		self._combined_obs[n_binary] = self._cached_sarfa_frame
-
 		if self._ready_for_sarfa(binary_obs):
 			self.steps_since_sarfa += 1
 			if self.steps_since_sarfa >= self.sarfa_compute_interval:
 				self._update_cached_sarfa_frame(self._combined_obs)
 				self.steps_since_sarfa = 0
+
+		# Expose the newest cached SARFA frame in the current observation.
+		self._combined_obs[:n_binary] = binary_obs
+		self._combined_obs[n_binary] = self._cached_sarfa_frame
 
 		return self._combined_obs
 
@@ -173,17 +174,17 @@ class SarfaDualWrapperEight(_SarfaDualBase):
 		binary_obs = super().observation(observation)
 		n_binary = binary_obs.shape[0]
 
-		self.sarfa_frame_buffer.append(self._cached_sarfa_frame.copy())
-
-		self._combined_obs[:n_binary] = binary_obs
-		for i, frame in enumerate(self.sarfa_frame_buffer):
-			self._combined_obs[n_binary + i] = frame
-
 		if self._ready_for_sarfa(binary_obs) and len(self.sarfa_frame_buffer) == self.buffer_window_size:
 			self.steps_since_sarfa += 1
 			if self.steps_since_sarfa >= self.sarfa_compute_interval:
 				self._update_cached_sarfa_frame(self._combined_obs)
 				self.steps_since_sarfa = 0
+
+		self.sarfa_frame_buffer.append(self._cached_sarfa_frame.copy())
+
+		self._combined_obs[:n_binary] = binary_obs
+		for i, frame in enumerate(self.sarfa_frame_buffer):
+			self._combined_obs[n_binary + i] = frame
 
 		return self._combined_obs
 

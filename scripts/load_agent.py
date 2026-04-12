@@ -155,7 +155,7 @@ def load_agent(opt, env=None, device="cpu"):
         ckpt = torch.load(pth, map_location=torch.device('cpu'))
     else:
         ckpt = torch.load(pth)
-    if "ppo" in pth and env.obs_mode == "dqn":
+    if "ppo" in pth: # and env.obs_mode == "dqn":
         agent = PPOAgent(env)
         agent.load_state_dict(ckpt["model_weights"])
     elif env.obs_mode == "obj":
