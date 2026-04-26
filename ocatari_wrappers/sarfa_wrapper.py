@@ -35,7 +35,7 @@ class SarfaSaliencyWrapper(BinaryMaskWrapper):
         self.use_fade_in = use_fade_in  # FADE IN
         self.fade_in_steps = fade_in_steps # 10 is number environments in cleanRL. Divide X by num envs if you want X global step fade
         self.sarfa_step_counter = 0
-        self.min_visible = 40  # Minimum intensity after fade-in (0-255), objects never fully invisible
+        self.min_visible = 0  # Minimum intensity after fade-in (0-255), objects never fully invisible
         # 0 for normal without minimum visibility
 
         self.use_gamma = False  # use power function instead of min_visible
